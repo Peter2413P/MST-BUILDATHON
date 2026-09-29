@@ -6,6 +6,7 @@ import type {
   CodeSpec,
   FactCheckSpec,
   FactCheckItem,
+  WebsiteSpec,
   NormalizedArtifact,
   MultiArtifactComposite,
 } from './types';
@@ -33,7 +34,6 @@ export function isValidChartSpec(obj: unknown): obj is ChartSpec {
     if (!ds || typeof ds !== 'object') return false;
     const dataset = ds as { data?: unknown };
     if (!Array.isArray(dataset.data) || dataset.data.length === 0) return false;
-    // Ensure dataset values have numbers or parseable numeric values
     const hasNumbers = dataset.data.some(d => typeof d === 'number' || (!isNaN(Number(d)) && d !== null && d !== ''));
     if (!hasNumbers) return false;
   }
@@ -76,6 +76,17 @@ export function isValidFactCheckSpec(obj: unknown): obj is FactCheckSpec {
   if (cand.type === 'fact_check' && Array.isArray(cand.items)) {
     return isFactCheckArray(cand.items);
   }
+  return false;
+}
+
+/**
+ * Validates whether an object is a well-formed WebsiteSpec.
+ */
+export function isValidWebsiteSpec(obj: unknown): obj is WebsiteSpec {
+  if (!obj || typeof obj !== 'object') return false;
+  const cand = obj as Partial<WebsiteSpec>;
+  if (cand.type === 'website') return true;
+  if (cand.buildStatus && Array.isArray(cand.pages) && (Array.isArray(cand.files) || cand.brand)) return true;
   return false;
 }
 
@@ -219,7 +230,23 @@ export function normalizeArtifact(
 
   // 1. Direct Object / Array input checks
   if (rawInput && typeof rawInput === 'object') {
-    // A. Fact Check Array Check
+    // A. Website Deliverable Check
+    if (isValidWebsiteSpec(rawInput)) {
+      if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: website');
+      const site = rawInput as Partial<WebsiteSpec>;
+      return {
+        artifactId: id,
+        type: 'website',
+        title: site.name || defaultTitle || 'Website Deliverable',
+        mimeType: 'application/vnd.agentmesh.website+json',
+        rawContent: JSON.stringify(rawInput, null, 2),
+        data: rawInput as WebsiteSpec,
+        sourceAgent,
+        status: site.status === 'failed' ? 'failed' : 'completed',
+      };
+    }
+
+    // B. Fact Check Array Check
     if (isFactCheckArray(rawInput)) {
       if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: fact_check');
       return {
@@ -252,7 +279,7 @@ export function normalizeArtifact(
       };
     }
 
-    // B. Chart Check
+    // C. Chart Check
     if (isValidChartSpec(rawInput)) {
       if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: chart');
       return {
@@ -267,7 +294,7 @@ export function normalizeArtifact(
       };
     }
 
-    // C. Table Check
+    // D. Table Check
     if (isValidTableSpec(rawInput)) {
       if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: table');
       return {
@@ -282,8 +309,22 @@ export function normalizeArtifact(
       };
     }
 
-    // D. Explicit artifact objects
+    // E. Explicit artifact objects
     const candObj = rawInput as Record<string, unknown>;
+    if (candObj.type === 'website') {
+      if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: website');
+      return {
+        artifactId: id,
+        type: 'website',
+        title: (candObj.name as string) || defaultTitle || 'Website Deliverable',
+        mimeType: 'application/vnd.agentmesh.website+json',
+        rawContent: JSON.stringify(rawInput, null, 2),
+        data: candObj as unknown as WebsiteSpec,
+        sourceAgent,
+        status: candObj.status === 'failed' ? 'failed' : 'completed',
+      };
+    }
+
     if (candObj.type === 'fact_check' && Array.isArray(candObj.items)) {
       if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: fact_check');
       return {
@@ -377,7 +418,6 @@ export function normalizeArtifact(
   if (typeof rawInput === 'string') {
     const trimmed = rawInput.trim();
 
-    // A. Check for JSON structure via balanced brace scanner or markdown code blocks
     const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
     let parsedJson: unknown = null;
     let jsonString = '';
@@ -397,7 +437,6 @@ export function normalizeArtifact(
           parsedJson = JSON.parse(trimmed);
           jsonString = trimmed;
         } catch {
-          // Attempt salvage for cut-off Chart.js JSON
           parsedJson = trySalvageChartJson(trimmed);
           if (parsedJson) jsonString = JSON.stringify(parsedJson, null, 2);
         }
@@ -408,6 +447,7 @@ export function normalizeArtifact(
       const candidates = extractJsonCandidates(trimmed);
       for (const cand of candidates) {
         if (
+          isValidWebsiteSpec(cand.parsed) ||
           isFactCheckArray(cand.parsed) ||
           isValidFactCheckSpec(cand.parsed) ||
           isValidChartSpec(cand.parsed) ||
@@ -427,7 +467,23 @@ export function normalizeArtifact(
     }
 
     if (parsedJson) {
-      // 1. Fact Check Array / Spec
+      // 1. Website Spec
+      if (isValidWebsiteSpec(parsedJson)) {
+        if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: website');
+        const site = parsedJson as Partial<WebsiteSpec>;
+        return {
+          artifactId: id,
+          type: 'website',
+          title: site.name || defaultTitle || 'Website Deliverable',
+          mimeType: 'application/vnd.agentmesh.website+json',
+          rawContent: jsonString || trimmed,
+          data: parsedJson as WebsiteSpec,
+          sourceAgent,
+          status: site.status === 'failed' ? 'failed' : 'completed',
+        };
+      }
+
+      // 2. Fact Check Array / Spec
       if (isFactCheckArray(parsedJson)) {
         if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: fact_check');
         return {
@@ -460,7 +516,7 @@ export function normalizeArtifact(
         };
       }
 
-      // 2. Chart Spec
+      // 3. Chart Spec
       if (isValidChartSpec(parsedJson)) {
         if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: chart');
         return {
@@ -475,7 +531,7 @@ export function normalizeArtifact(
         };
       }
 
-      // 3. Table Spec
+      // 4. Table Spec
       if (isValidTableSpec(parsedJson)) {
         if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: table');
         return {
@@ -491,6 +547,20 @@ export function normalizeArtifact(
       }
 
       const candObj = parsedJson as Record<string, unknown>;
+      if (candObj.type === 'website') {
+        if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: website');
+        return {
+          artifactId: id,
+          type: 'website',
+          title: (candObj.name as string) || defaultTitle || 'Website Deliverable',
+          mimeType: 'application/vnd.agentmesh.website+json',
+          rawContent: jsonString || trimmed,
+          data: candObj as unknown as WebsiteSpec,
+          sourceAgent,
+          status: candObj.status === 'failed' ? 'failed' : 'completed',
+        };
+      }
+
       if (candObj.type === 'fact_check' && Array.isArray(candObj.items)) {
         if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: fact_check');
         return {
@@ -688,7 +758,7 @@ export function normalizeArtifact(
 }
 
 /**
- * Extracts multiple artifacts if a narrative response contains embedded fact check, chart, table, code, or HTML blocks.
+ * Extracts multiple artifacts if a narrative response contains embedded website, fact check, chart, table, code, or HTML blocks.
  */
 export function extractMultiArtifacts(
   rawContent: string | null | undefined,
@@ -707,7 +777,10 @@ export function extractMultiArtifacts(
   while ((match = codeBlockRegex.exec(trimmed)) !== null) {
     try {
       const parsed = JSON.parse(match[1]);
-      if (isFactCheckArray(parsed) || isValidFactCheckSpec(parsed)) {
+      if (isValidWebsiteSpec(parsed)) {
+        artifacts.push(normalizeArtifact(parsed, sourceAgent, (parsed as any).name || 'Website Deliverable'));
+        narrative = narrative.replace(match[0], '').trim();
+      } else if (isFactCheckArray(parsed) || isValidFactCheckSpec(parsed)) {
         artifacts.push(normalizeArtifact(parsed, sourceAgent, 'Fact Check Results'));
         narrative = narrative.replace(match[0], '').trim();
       } else if (isValidChartSpec(parsed)) {
@@ -728,7 +801,10 @@ export function extractMultiArtifacts(
   // 2. Search for embedded JSON candidates (without code fences)
   const jsonCandidates = extractJsonCandidates(narrative);
   for (const cand of jsonCandidates) {
-    if (isFactCheckArray(cand.parsed) || isValidFactCheckSpec(cand.parsed)) {
+    if (isValidWebsiteSpec(cand.parsed)) {
+      artifacts.push(normalizeArtifact(cand.parsed, sourceAgent, (cand.parsed as any).name || 'Website Deliverable'));
+      narrative = narrative.replace(cand.raw, '').trim();
+    } else if (isFactCheckArray(cand.parsed) || isValidFactCheckSpec(cand.parsed)) {
       artifacts.push(normalizeArtifact(cand.parsed, sourceAgent, 'Fact Check Results'));
       narrative = narrative.replace(cand.raw, '').trim();
     } else if (isValidChartSpec(cand.parsed)) {
@@ -750,6 +826,7 @@ export function extractMultiArtifacts(
   if (artifacts.length === 0) {
     const mainArtifact = normalizeArtifact(trimmed, sourceAgent);
     if (
+      mainArtifact.type === 'website' ||
       mainArtifact.type === 'fact_check' ||
       mainArtifact.type === 'chart' ||
       mainArtifact.type === 'table' ||

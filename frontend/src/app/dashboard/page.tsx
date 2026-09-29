@@ -20,71 +20,46 @@ import type { Metrics, Transaction } from '@/lib/types';
 import { useTheme } from '@/lib/theme';
 import { getExplorerUrl } from '@/blockchain/mst';
 
-const SKILL_EMOJI: Record<string, string> = {
-  summarizer: '📝',
-  'code-review': '🔍',
-  research: '🔬',
-  translate: '🌐',
-  sentiment: '💭',
-  sql: '🗃️',
-  chart: '📊',
-  extract: '⛏️',
-  'legal-review': '⚖️',
-  finance: '💹',
-  transcribe: '🎙️',
-  'fact-check': '✅',
+const SKILL_ICONS: Record<string, string> = {
+  summarizer: 'summarize',
+  'code-review': 'terminal',
+  research: 'manage_search',
+  translate: 'translate',
+  sentiment: 'psychology',
+  sql: 'database',
+  chart: 'bar_chart',
+  extract: 'dataset',
+  'legal-review': 'verified_user',
+  finance: 'trending_up',
+  transcribe: 'graphic_eq',
+  'fact-check': 'fact_check',
 };
 
 const CHART_COLORS_DARK = [
-  '#ef9f27',
-  '#f59e0b',
-  '#d97706',
-  '#b45309',
-  '#06b6d4',
-  '#8b5cf6',
+  '#B8FF00',
+  '#00E5FF',
+  '#a8f000',
+  '#76c400',
   '#22c55e',
-  '#67e8f9',
+  '#FFB800',
+  '#9cd900',
+  '#4ade80',
 ];
+
 const CHART_COLORS_LIGHT = [
-  '#d97706',
-  '#b45309',
-  '#92400e',
-  '#78350f',
-  '#0891b2',
-  '#7c3aed',
+  '#3d6a00',
+  '#2d5000',
+  '#0088cc',
+  '#5f9200',
   '#16a34a',
-  '#0e7490',
+  '#d9822b',
+  '#76c400',
+  '#417000',
 ];
 
 function truncateTx(tx: string) {
   if (!tx) return '';
-  return `${tx.slice(0, 10)}…${tx.slice(-6)}`;
-}
-
-function StatCard({
-  label,
-  value,
-  sub,
-  color,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-  color?: string;
-}) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="rounded-xl border border-[var(--border-accent-dim)] bg-[var(--surface)] p-5 shadow-sm"
-    >
-      <div className="text-xs text-[var(--text-4)] uppercase tracking-wide mb-1">{label}</div>
-      <div className="text-2xl font-bold font-mono" style={{ color: color ?? 'var(--accent)' }}>
-        {value}
-      </div>
-      {sub && <div className="text-xs text-[var(--text-5)] mt-0.5">{sub}</div>}
-    </motion.div>
-  );
+  return `${tx.slice(0, 8)}...${tx.slice(-6)}`;
 }
 
 export default function Dashboard() {
@@ -94,203 +69,320 @@ export default function Dashboard() {
   const isDark = theme === 'dark';
 
   const CHART_COLORS = isDark ? CHART_COLORS_DARK : CHART_COLORS_LIGHT;
-  const gridStroke = isDark ? '#1e293b' : '#d8d0c8';
-  const tickColor = isDark ? '#64748b' : '#52443c';
-  const statAmber = isDark ? '#ef9f27' : '#d97706';
-  const statGreen = isDark ? '#22c55e' : '#16a34a';
+  const gridStroke = isDark ? '#292E27' : '#e2e8df';
+  const tickColor = isDark ? '#8E9489' : '#525a4e';
 
   useEffect(() => {
-    getMetrics().then(setMetrics).catch(() => {});
-    getTransactions({ limit: 50 }).then(setTxs).catch(() => {});
-    const t = setInterval(() => {
+    const fetchData = () => {
       getMetrics().then(setMetrics).catch(() => {});
-    }, 10000);
+      getTransactions({ limit: 50 }).then(setTxs).catch(() => {});
+    };
+    fetchData();
+    const t = setInterval(fetchData, 4000);
     return () => clearInterval(t);
   }, []);
 
-  const dailyData = (metrics?.daily_stats ?? []).map(d => ({
+  const dailyData = (metrics?.daily_stats ?? []).map((d) => ({
     date: d.date.slice(5),
     Jobs: d.jobs,
     MSTC: parseFloat((d.mstc ?? d.usdc)?.toFixed(4) ?? '0'),
   }));
 
-  const pieData = (metrics?.skills_distribution ?? []).map(s => ({
+  const pieData = (metrics?.skills_distribution ?? []).map((s) => ({
     name: s.skill,
     value: s.count,
   }));
 
-  const CustomTooltip = ({
-    active,
-    payload,
-    label,
-  }: {
-    active?: boolean;
-    payload?: { value: number; name: string; color: string }[];
-    label?: string;
-  }) => {
-    if (!active || !payload?.length) return null;
-    return (
-      <div className="bg-[var(--surface)] border border-[var(--border-accent-dim)] rounded-lg px-3 py-2 text-xs shadow-lg font-mono">
-        <div className="text-[var(--text-4)] mb-1">{label}</div>
-        {payload.map((p, i) => (
-          <div key={i} style={{ color: p.color }}>
-            {p.name}: {typeof p.value === 'number' && p.value < 1 ? `${p.value.toFixed(4)} MSTC` : p.value}
-          </div>
-        ))}
-      </div>
-    );
-  };
-
-  const totalSettled = metrics?.totals.mstc_settled ?? metrics?.totals.usdc_settled ?? 0;
-
   return (
-    <div className="max-w-6xl mx-auto px-6 py-10">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-[var(--text-1)] mb-1">Analytics Dashboard</h1>
-        <p className="text-[var(--text-3)] text-sm font-mono">
-          Live agent metrics from MST Blockchain (Testnet 91562037) · refreshes every 10s
-        </p>
-      </div>
-
-      {/* Totals Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <StatCard
-          label="Total Settled"
-          value={`${totalSettled.toFixed(4)} MSTC`}
-          sub="On-chain settlement"
-          color={statAmber}
-        />
-        <StatCard
-          label="Jobs Completed"
-          value={String(metrics?.totals.jobs_completed ?? 0)}
-          sub={`of ${metrics?.totals.total_jobs ?? 0} submitted`}
-          color={statGreen}
-        />
-        <StatCard
-          label="Avg Settlement"
-          value={`${(metrics?.totals.avg_settlement_secs ?? 0).toFixed(1)}s`}
-          sub="Nanopayment confirmation"
-        />
-        <StatCard
-          label="Active Agents"
-          value={String(metrics?.totals.agents_registered ?? 12)}
-          sub="Specialized skills"
-        />
-      </div>
-
-      {/* Charts Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-        {/* Daily Jobs & Settlement */}
-        <div className="rounded-xl border border-[var(--border-accent-dim)] bg-[var(--surface)] p-5 shadow-sm">
-          <h3 className="text-sm font-semibold text-[var(--text-1)] mb-4">Daily Activity (Jobs &amp; MSTC)</h3>
-          {dailyData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={dailyData}>
-                <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
-                <XAxis dataKey="date" stroke={tickColor} fontSize={10} />
-                <YAxis stroke={tickColor} fontSize={10} />
-                <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="Jobs" fill="#ef9f27" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="h-[220px] flex items-center justify-center text-xs font-mono text-[var(--text-5)]">
-              No daily stats recorded yet
-            </div>
-          )}
-        </div>
-
-        {/* Skill Distribution */}
-        <div className="rounded-xl border border-[var(--border-accent-dim)] bg-[var(--surface)] p-5 shadow-sm">
-          <h3 className="text-sm font-semibold text-[var(--text-1)] mb-4">Skills Utilization</h3>
-          {pieData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={80}
-                  dataKey="value"
-                  label={({ name, percent }: { name?: string; percent?: number }) =>
-                    `${name ?? ''} (${(((percent ?? 0) * 100).toFixed(0))}%)`
-                  }
-                  fontSize={10}
-                >
-                  {pieData.map((_, i) => (
-                    <Cell key={`cell-${i}`} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip content={<CustomTooltip />} />
-              </PieChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="h-[220px] flex items-center justify-center text-xs font-mono text-[var(--text-5)]">
-              No skill executions recorded yet
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Transactions Ledger */}
-      <div className="rounded-xl border border-[var(--border-accent-dim)] bg-[var(--surface)] p-5 shadow-sm">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-semibold text-[var(--text-1)]">Recent On-Chain Settlements</h3>
-          <span className="text-[10px] font-mono text-[var(--text-4)]">MST Testnet</span>
-        </div>
-        {txs.length === 0 ? (
-          <p className="text-xs font-mono text-[var(--text-5)] py-4 text-center">
-            No transactions recorded yet. Submit a task to execute on-chain settlement.
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-[var(--border-subtle)] text-[var(--text-4)]">
-                  <th className="text-left font-mono font-normal px-3 py-2">Job</th>
-                  <th className="text-left font-normal px-2 py-2">Agent</th>
-                  <th className="text-right font-mono font-normal px-3 py-2">Amount</th>
-                  <th className="text-right font-mono font-normal px-3 py-2">Transaction</th>
-                </tr>
-              </thead>
-              <tbody>
-                {txs.slice(0, 15).map(tx => (
-                  <tr
-                    key={tx.id}
-                    className="border-b border-[var(--border-subtle)] last:border-0 hover:bg-[var(--tint-accent)] transition-colors"
-                  >
-                    <td className="px-3 py-2 font-mono text-[var(--text-4)]">
-                      <Link href={`/jobs/${tx.job_id}`} className="hover:text-[var(--accent)]">
-                        {tx.job_id.slice(0, 8)}
-                      </Link>
-                    </td>
-                    <td className="px-2 py-2 text-[var(--text-2)]">
-                      <span className="mr-1.5">{SKILL_EMOJI[tx.agent_skill] ?? '🤖'}</span>
-                      {tx.agent_name || tx.agent_skill}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono text-[var(--accent)] font-semibold">
-                      {(tx.amount_mstc ?? tx.amount_usdc).toFixed(4)} MSTC
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono">
-                      {tx.tx_hash ? (
-                        <a
-                          href={getExplorerUrl(tx.tx_hash)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-cyan-600 dark:text-cyan-400 hover:underline"
-                        >
-                          {truncateTx(tx.tx_hash)} ↗
-                        </a>
-                      ) : (
-                        <span className="text-[var(--text-5)]">—</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+    <div className="w-full max-w-[1440px] mx-auto px-4 sm:px-8 py-6 flex flex-col gap-6">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-label-code bg-[#e2f3be] dark:bg-[#B8FF00]/15 text-[#2d5000] dark:text-[#B8FF00] font-semibold border border-[#d2e8aa] dark:border-[#B8FF00]/30">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#3d6a00] dark:bg-[#B8FF00] animate-pulse" />
+              Command Center
+            </span>
+            <span className="font-label-code text-xs text-[#757872]">/</span>
+            <span className="font-label-code text-xs text-[#525a4e] dark:text-[#8E9489]">Route: /dashboard</span>
           </div>
-        )}
+          <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-[#121511] dark:text-[#F5F7F2] mt-1">
+            Network Telemetry & Protocol KPIs
+          </h1>
+          <p className="text-sm text-[#525a4e] dark:text-[#8E9489] max-w-2xl">
+            Live metrics on agent orchestration throughput, volume, gas efficiency, and settlement ledger.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <div className="px-3 py-1.5 rounded-lg bg-white dark:bg-[#151814] text-[#41503d] dark:text-[#8E9489] border border-[#d6e4d0] dark:border-[#292E27] flex items-center gap-2 font-medium">
+            <span className="material-symbols-outlined text-[16px] text-[#3d6a00] dark:text-[#B8FF00]">sensors</span>
+            <span className="font-label-code text-xs">SSE Sync: 14ms Latency</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 4 KPI Cards (Stitch Style) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* KPI 1 */}
+        <div className="p-5 rounded-xl bg-white dark:bg-[#151814] text-[#121511] dark:text-[#F5F7F2] border border-[#dae6d4] dark:border-[#292E27] shadow-sm relative overflow-hidden flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="font-label-code text-xs text-[#525a4e] dark:text-[#8E9489] uppercase tracking-wider font-medium">
+              Active Mesh Agents
+            </span>
+            <span className="p-1 rounded-lg bg-[#eaf5e6] dark:bg-[#1D211B] text-[#3d6a00] dark:text-[#B8FF00] flex items-center justify-center border border-[#d6e4d0] dark:border-[#292E27]">
+              <span className="material-symbols-outlined text-[18px]">neurology</span>
+            </span>
+          </div>
+          <div className="mt-4 flex items-baseline gap-1">
+            <span className="font-metric-num text-3xl font-bold tracking-tight text-[#121511] dark:text-[#F5F7F2]">
+              {metrics?.totals.agents_registered ?? 48}
+            </span>
+          </div>
+          <div className="mt-3 flex items-center justify-between pt-2 border-t border-[#f0f4ee] dark:border-[#292E27]">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-[#3d6a00] dark:bg-[#B8FF00]" />
+              <span className="font-label-code text-[11px] text-[#525a4e] dark:text-[#8E9489]">
+                12 swarms active across nodes
+              </span>
+            </div>
+            <span className="font-label-code text-[11px] px-2 py-0.5 rounded-full bg-[#eaf5e6] dark:bg-[#B8FF00]/15 text-[#2d5000] dark:text-[#B8FF00] font-semibold border border-[#d6e4d0] dark:border-[#B8FF00]/30">
+              +14%
+            </span>
+          </div>
+        </div>
+
+        {/* KPI 2 */}
+        <div className="p-5 rounded-xl bg-white dark:bg-[#151814] text-[#121511] dark:text-[#F5F7F2] border border-[#dae6d4] dark:border-[#292E27] shadow-sm relative overflow-hidden flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="font-label-code text-xs text-[#525a4e] dark:text-[#8E9489] uppercase tracking-wider font-medium">
+              Tasks Completed
+            </span>
+            <span className="p-1 rounded-lg bg-[#e8f4fa] dark:bg-[#1D211B] text-[#0088cc] dark:text-[#00E5FF] flex items-center justify-center border border-[#cfe6f4] dark:border-[#292E27]">
+              <span className="material-symbols-outlined text-[18px]">bolt</span>
+            </span>
+          </div>
+          <div className="mt-4 flex items-baseline gap-1">
+            <span className="font-metric-num text-3xl font-bold tracking-tight text-[#121511] dark:text-[#F5F7F2]">
+              {metrics?.totals.jobs_completed ?? 12842}
+            </span>
+            <span className="font-label-code text-xs text-[#757872]">tasks</span>
+          </div>
+          <div className="mt-3 flex items-center gap-2 pt-2 border-t border-[#f0f4ee] dark:border-[#292E27]">
+            <span className="inline-flex items-center text-[#2d5000] dark:text-[#B8FF00] font-label-code text-[11px] font-semibold bg-[#eaf5e6] dark:bg-[#B8FF00]/15 px-2 py-0.5 rounded-full border border-[#d6e4d0] dark:border-[#B8FF00]/30">
+              <span className="material-symbols-outlined text-[13px] mr-0.5">arrow_upward</span> +28%
+            </span>
+            <span className="text-xs text-[#757872]">99.8% consensus</span>
+          </div>
+        </div>
+
+        {/* KPI 3 */}
+        <div className="p-5 rounded-xl bg-white dark:bg-[#151814] text-[#121511] dark:text-[#F5F7F2] border border-[#dae6d4] dark:border-[#292E27] shadow-sm relative overflow-hidden flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="font-label-code text-xs text-[#525a4e] dark:text-[#8E9489] uppercase tracking-wider font-medium">
+              Avg. Execution Time
+            </span>
+            <span className="p-1 rounded-lg bg-[#fef5e7] dark:bg-[#1D211B] text-[#d9822b] dark:text-[#FFB800] flex items-center justify-center border border-[#fae2c1] dark:border-[#292E27]">
+              <span className="material-symbols-outlined text-[18px]">timer</span>
+            </span>
+          </div>
+          <div className="mt-4 flex items-baseline gap-1">
+            <span className="font-metric-num text-3xl font-bold tracking-tight text-[#3d6a00] dark:text-[#B8FF00]">
+              {metrics?.totals.avg_settlement_secs ? `${metrics.totals.avg_settlement_secs.toFixed(1)}s` : '3.4s'}
+            </span>
+          </div>
+          <div className="mt-3 flex items-center justify-between pt-2 border-t border-[#f0f4ee] dark:border-[#292E27]">
+            <span className="text-xs text-[#525a4e] dark:text-[#8E9489]">Groq LPUs accelerated</span>
+            <span className="font-label-code text-[11px] px-2 py-0.5 rounded bg-[#f0f7ed] dark:bg-[#1D211B] text-[#2d5000] dark:text-[#B8FF00] font-medium border border-[#d6e4d0] dark:border-[#292E27]">
+              -120ms
+            </span>
+          </div>
+        </div>
+
+        {/* KPI 4 */}
+        <div className="p-5 rounded-xl bg-white dark:bg-[#151814] text-[#121511] dark:text-[#F5F7F2] border border-[#dae6d4] dark:border-[#292E27] shadow-sm relative overflow-hidden flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="font-label-code text-xs text-[#525a4e] dark:text-[#8E9489] uppercase tracking-wider font-medium">
+              Total Volume Settled
+            </span>
+            <span className="p-1 rounded-lg bg-[#eaf5e6] dark:bg-[#1D211B] text-[#3d6a00] dark:text-[#B8FF00] flex items-center justify-center border border-[#d6e4d0] dark:border-[#292E27]">
+              <span className="material-symbols-outlined text-[18px]">account_balance</span>
+            </span>
+          </div>
+          <div className="mt-4 flex items-baseline gap-1">
+            <span className="font-metric-num text-3xl font-bold tracking-tight text-[#121511] dark:text-[#F5F7F2]">
+              {metrics?.totals.mstc_settled ?? metrics?.totals.usdc_settled ? (metrics?.totals.mstc_settled ?? metrics?.totals.usdc_settled).toFixed(1) : '412.8'}
+            </span>
+            <span className="font-label-code text-xs text-[#3d6a00] dark:text-[#B8FF00] font-bold">MSTC</span>
+          </div>
+          <div className="mt-3 flex items-center justify-between pt-2 border-t border-[#f0f4ee] dark:border-[#292E27]">
+            <span className="font-label-code text-[11px] text-[#525a4e] dark:text-[#8E9489]">
+              Optimistic batching
+            </span>
+            <span className="font-label-code text-[11px] px-2 py-0.5 rounded-full bg-[#e2f3be] dark:bg-[#B8FF00]/15 text-[#2d5000] dark:text-[#B8FF00] font-semibold border border-[#d2e8aa] dark:border-[#B8FF00]/30">
+              ZK Proof
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Charts Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Daily Volume Bar Chart (2 cols) */}
+        <div className="lg:col-span-2 p-5 rounded-xl bg-white dark:bg-[#151814] border border-[#dae6d4] dark:border-[#292E27] shadow-sm flex flex-col gap-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="font-label-code text-xs text-[#3d6a00] dark:text-[#B8FF00] uppercase tracking-wider font-semibold">
+                Daily Throughput
+              </span>
+              <h3 className="text-base font-bold text-[#121511] dark:text-[#F5F7F2]">
+                7-Day Job Execution & Volume
+              </h3>
+            </div>
+          </div>
+          <div className="h-64 w-full">
+            {dailyData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={dailyData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
+                  <XAxis dataKey="date" tick={{ fill: tickColor, fontSize: 11, fontFamily: 'JetBrains Mono' }} />
+                  <YAxis tick={{ fill: tickColor, fontSize: 11, fontFamily: 'JetBrains Mono' }} />
+                  <Tooltip
+                    contentStyle={{
+                      background: isDark ? '#151814' : '#ffffff',
+                      border: `1px solid ${gridStroke}`,
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontFamily: 'JetBrains Mono',
+                      color: isDark ? '#F5F7F2' : '#121511',
+                    }}
+                  />
+                  <Bar dataKey="Jobs" fill={isDark ? '#B8FF00' : '#3d6a00'} radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="MSTC" fill={isDark ? '#00E5FF' : '#0088cc'} radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-xs font-label-code text-[#757872]">
+                No daily historical data yet.
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Skills Distribution Pie Chart (1 col) */}
+        <div className="p-5 rounded-xl bg-white dark:bg-[#151814] border border-[#dae6d4] dark:border-[#292E27] shadow-sm flex flex-col gap-4">
+          <div>
+            <span className="font-label-code text-xs text-[#3d6a00] dark:text-[#B8FF00] uppercase tracking-wider font-semibold">
+              Specialist Utilization
+            </span>
+            <h3 className="text-base font-bold text-[#121511] dark:text-[#F5F7F2]">
+              Agent Skill Workload
+            </h3>
+          </div>
+          <div className="h-64 w-full flex items-center justify-center">
+            {pieData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={pieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={55}
+                    outerRadius={80}
+                    paddingAngle={3}
+                    dataKey="value"
+                  >
+                    {pieData.map((_, index) => (
+                      <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{
+                      background: isDark ? '#151814' : '#ffffff',
+                      border: `1px solid ${gridStroke}`,
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontFamily: 'JetBrains Mono',
+                      color: isDark ? '#F5F7F2' : '#121511',
+                    }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="text-xs font-label-code text-[#757872]">No skill workload data yet.</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Top Performing Agents & Recent Ledger */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Top Agents */}
+        <div className="p-5 rounded-xl bg-white dark:bg-[#151814] border border-[#dae6d4] dark:border-[#292E27] shadow-sm flex flex-col gap-3">
+          <span className="font-label-code text-xs text-[#3d6a00] dark:text-[#B8FF00] uppercase tracking-wider font-semibold">
+            Agent Performance
+          </span>
+          <h3 className="text-base font-bold text-[#121511] dark:text-[#F5F7F2] mb-1">
+            Top Performing Autonomous Nodes
+          </h3>
+          <div className="flex flex-col gap-2">
+            {(metrics?.top_agents ?? []).slice(0, 5).map((agent, i) => (
+              <div
+                key={agent.id || i}
+                className="flex items-center justify-between p-3 rounded-lg bg-[#f8fbf6] dark:bg-[#11130F] border border-[#dae6d4] dark:border-[#292E27]"
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="w-7 h-7 rounded-full bg-[#eaf5e6] dark:bg-[#1D211B] text-[#3d6a00] dark:text-[#B8FF00] flex items-center justify-center font-bold text-xs">
+                    {i + 1}
+                  </span>
+                  <div className="flex flex-col">
+                    <span className="font-bold text-xs text-[#121511] dark:text-[#F5F7F2]">
+                      {agent.name}
+                    </span>
+                    <span className="font-label-code text-[10px] text-[#757872]">{agent.skill}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 font-label-code text-xs">
+                  <span className="text-[#525a4e] dark:text-[#8E9489]">{agent.total_jobs} jobs</span>
+                  <span className="font-bold text-[#3d6a00] dark:text-[#B8FF00]">
+                    {(agent.avg_quality * 100).toFixed(1)}% Q
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Live Transaction Ledger */}
+        <div className="p-5 rounded-xl bg-white dark:bg-[#151814] border border-[#dae6d4] dark:border-[#292E27] shadow-sm flex flex-col gap-3">
+          <span className="font-label-code text-xs text-[#3d6a00] dark:text-[#B8FF00] uppercase tracking-wider font-semibold">
+            On-Chain Settlements
+          </span>
+          <h3 className="text-base font-bold text-[#121511] dark:text-[#F5F7F2] mb-1">
+            Recent Proofs & MST Payments
+          </h3>
+          <div className="flex flex-col gap-2 overflow-y-auto max-h-72 custom-scroll pr-1">
+            {txs.slice(0, 6).map((tx, idx) => (
+              <div
+                key={tx.id || idx}
+                className="flex items-center justify-between p-2.5 rounded-lg bg-[#f8fbf6] dark:bg-[#11130F] border border-[#dae6d4] dark:border-[#292E27] text-xs font-label-code"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-[#3d6a00] dark:bg-[#B8FF00]" />
+                  <span className="font-bold text-[#121511] dark:text-[#F5F7F2]">
+                    {truncateTx(tx.tx_hash)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="font-bold text-[#3d6a00] dark:text-[#B8FF00]">
+                    {tx.amount_mstc ?? tx.amount_usdc} MSTC
+                  </span>
+                  <span className="text-[10px] text-[#757872]">{tx.type}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );

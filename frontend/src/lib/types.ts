@@ -43,6 +43,7 @@ export interface Subtask {
   agent_name: string;
   skill: string;
   prompt: string;
+  description?: string;
   result: string | null;
   tokens_used: number;
   complexity_weight: number;
@@ -50,6 +51,7 @@ export interface Subtask {
   contribution_pct: number | null;
   payment_mstc?: number | null;
   payment_usdc: number | null; // Backwards-compatible alias for MSTC payout
+  payout_amount?: number | null;
   payment_tx: string | null;
   status: SubtaskStatus;
   validation_status?: ValidationStatus;
@@ -67,7 +69,7 @@ export interface Subtask {
 export interface Job {
   id: string;
   description: string;
-  status: 'pending' | 'planning' | 'running' | 'settling' | 'completed' | 'failed';
+  status: 'pending' | 'planning' | 'running' | 'settling' | 'completed' | 'failed' | 'settled' | 'cancelled';
   payment_state?: PaymentState;
   total_price_mstc?: number | null;
   total_price_usdc: number | null; // Backwards-compatible alias for MSTC total
@@ -75,6 +77,7 @@ export interface Job {
   result: string | null;
   error: string | null;
   submitted_at: string;
+  created_at?: string;
   completed_at: string | null;
   job_type?: 'auto' | 'direct';
   direct_agent_id?: string | null;
@@ -91,11 +94,14 @@ export interface Transaction {
   amount_usdc: number; // Backwards-compatible alias for MSTC amount
   currency?: string;
   tx_hash: string;
-  demo: number;
+  demo?: number;
   created_at: string;
-  agent_name: string;
-  agent_skill: string;
-  job_description: string;
+  agent_name?: string;
+  agent_skill?: string;
+  job_description?: string;
+  type?: string;
+  from_address?: string;
+  to_address?: string;
 }
 
 export interface DailyStat {

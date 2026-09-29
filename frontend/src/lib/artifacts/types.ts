@@ -8,7 +8,8 @@ export type ArtifactType =
   | 'code'
   | 'table'
   | 'json'
-  | 'fact_check';
+  | 'fact_check'
+  | 'website';
 
 export interface ChartDataset {
   label?: string;
@@ -58,6 +59,51 @@ export interface FactCheckSpec {
   items: FactCheckItem[];
 }
 
+export interface WebsitePage {
+  name: string;
+  path: string;
+  status: 'ready' | 'pending' | 'error';
+}
+
+export interface WebsiteFile {
+  path: string;
+  content: string;
+  description?: string;
+}
+
+export interface WebsiteSpec {
+  type: 'website';
+  status: 'success' | 'failed' | 'building';
+  name: string;
+  brand?: string;
+  category?: string;
+  previewUrl?: string;
+  sourceArtifact?: string;
+  screenshots?: string[];
+  pages: WebsitePage[];
+  buildStatus: 'passed' | 'failed' | 'skipped';
+  debugAttempts: number;
+  summary: string;
+  files?: WebsiteFile[];
+  logs?: string[];
+  requirements?: {
+    brand?: string;
+    category?: string;
+    brandStory?: string;
+    productCatalog?: {
+      id?: string;
+      name: string;
+      price: number | string;
+      description?: string;
+      category?: string;
+      rating?: number | string;
+      image?: string;
+    }[];
+    [key: string]: unknown;
+  };
+  designSpec?: Record<string, unknown>;
+}
+
 export interface NormalizedArtifact {
   artifactId: string;
   type: ArtifactType;
@@ -65,7 +111,7 @@ export interface NormalizedArtifact {
   description?: string;
   mimeType: string;
   rawContent: string;
-  data?: ChartSpec | TableSpec | CodeSpec | FactCheckSpec | string | Record<string, unknown>;
+  data?: ChartSpec | TableSpec | CodeSpec | FactCheckSpec | WebsiteSpec | string | Record<string, unknown>;
   sourceAgent?: string;
   status: 'completed' | 'failed' | 'processing';
   error?: string;

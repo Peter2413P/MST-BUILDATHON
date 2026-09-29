@@ -25,8 +25,8 @@ let _blobUrl: string | null = null;
 async function getSqlJs(): Promise<any> {
   if (_SqlJs) return _SqlJs;
   if (!_SqlJsInitPromise) {
-    const initSql = require('sql.js/dist/sql-asm.js');
-    _SqlJsInitPromise = initSql.default();
+    const initSql = require('sql.js/dist/sql-asm-memory-growth.js');
+    _SqlJsInitPromise = initSql.default ? initSql.default() : initSql();
   }
   _SqlJs = await _SqlJsInitPromise;
   return _SqlJs;
@@ -129,8 +129,9 @@ function ensureSchema(db: SqlJsDatabase): Promise<void> {
     );
     CREATE TABLE IF NOT EXISTS jobs (
       id TEXT PRIMARY KEY, description TEXT NOT NULL, status TEXT DEFAULT 'pending',
-      total_price_usdc REAL, escrow_tx TEXT, buyer_tx TEXT, result TEXT, error TEXT,
-      submitted_at TEXT DEFAULT (datetime('now')), completed_at TEXT
+      total_price_usdc REAL, escrow_tx TEXT, buyer_tx TEXT, payer_address TEXT,
+      payment_status TEXT DEFAULT 'pending', settlement_verified INTEGER DEFAULT 0,
+      result TEXT, error TEXT, submitted_at TEXT DEFAULT (datetime('now')), completed_at TEXT
     );
     CREATE TABLE IF NOT EXISTS subtasks (
       id TEXT PRIMARY KEY, job_id TEXT NOT NULL, agent_id TEXT, skill TEXT NOT NULL,
@@ -144,17 +145,32 @@ function ensureSchema(db: SqlJsDatabase): Promise<void> {
     );
     CREATE TABLE IF NOT EXISTS transactions (
       id TEXT PRIMARY KEY, job_id TEXT, agent_id TEXT, amount_usdc REAL,
-      tx_hash TEXT, demo INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now'))
+      tx_hash TEXT, demo INTEGER DEFAULT 0, from_address TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS bond_slashes (
       id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, job_id TEXT,
       slash_amount REAL, reason TEXT, created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS auth_nonces (
+      wallet_address TEXT PRIMARY KEY, nonce TEXT NOT NULL,
+      expires_at INTEGER NOT NULL, created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      session_id TEXT PRIMARY KEY, wallet_address TEXT NOT NULL,
+      authenticated INTEGER DEFAULT 1, auto_payment_enabled INTEGER DEFAULT 1,
+      session_limit REAL DEFAULT 1000000.0, session_spent REAL DEFAULT 0.0,
+      expires_at INTEGER NOT NULL, created_at TEXT DEFAULT (datetime('now'))
     );
   `);
   for (const ddl of [
     "ALTER TABLE jobs ADD COLUMN job_type TEXT DEFAULT 'auto'",
     'ALTER TABLE jobs ADD COLUMN direct_agent_id TEXT',
     'ALTER TABLE jobs ADD COLUMN buyer_tx TEXT',
+    'ALTER TABLE jobs ADD COLUMN payer_address TEXT',
+    "ALTER TABLE jobs ADD COLUMN payment_status TEXT DEFAULT 'pending'",
+    'ALTER TABLE jobs ADD COLUMN settlement_verified INTEGER DEFAULT 0',
+    'ALTER TABLE transactions ADD COLUMN from_address TEXT',
     "ALTER TABLE subtasks ADD COLUMN validation_status TEXT DEFAULT 'pending'",
     'ALTER TABLE subtasks ADD COLUMN dependencies TEXT',
     'ALTER TABLE subtasks ADD COLUMN blocked_by TEXT',
@@ -175,32 +191,54 @@ export async function getDb(): Promise<SqlJsDatabase> {
 }
 
 export async function query(sql: string, args: unknown[] = []): Promise<Record<string, unknown>[]> {
-  const db = await getDb();
-  const stmt = db.prepare(sql);
-  stmt.bind(args as any[]);
-  const rows: Record<string, unknown>[] = [];
-  while (stmt.step()) rows.push(stmt.getAsObject());
-  stmt.free();
-  return rows;
+  try {
+    const db = await getDb();
+    const stmt = db.prepare(sql);
+    stmt.bind(args as any[]);
+    const rows: Record<string, unknown>[] = [];
+    while (stmt.step()) rows.push(stmt.getAsObject());
+    stmt.free();
+    return rows;
+  } catch (err) {
+    if (String(err).includes('OOM') || String(err).includes('Aborted')) {
+      console.error('[DB] Resetting cached database instance after OOM:', err);
+      _db = null;
+      _dbPromise = null;
+      _SqlJs = null;
+      _SqlJsInitPromise = null;
+    }
+    throw err;
+  }
 }
 
 export async function exec(sql: string, args: unknown[] = []): Promise<void> {
-  const db = await getDb();
-  const stmt = db.prepare(sql);
-  stmt.bind(args as any[]);
-  stmt.step();
-  stmt.free();
-  _dirty = true;
-  if (!IS_VERCEL) {
-    try {
-      const data = db.export();
-      fs.writeFileSync(LOCAL_DB_PATH, Buffer.from(data));
-      _dirty = false;
-    } catch {
+  try {
+    const db = await getDb();
+    const stmt = db.prepare(sql);
+    stmt.bind(args as any[]);
+    stmt.step();
+    stmt.free();
+    _dirty = true;
+    if (!IS_VERCEL) {
+      try {
+        const data = db.export();
+        fs.writeFileSync(LOCAL_DB_PATH, Buffer.from(data));
+        _dirty = false;
+      } catch {
+        scheduleFlush();
+      }
+    } else {
       scheduleFlush();
     }
-  } else {
-    scheduleFlush();
+  } catch (err) {
+    if (String(err).includes('OOM') || String(err).includes('Aborted')) {
+      console.error('[DB] Resetting cached database instance after OOM:', err);
+      _db = null;
+      _dbPromise = null;
+      _SqlJs = null;
+      _SqlJsInitPromise = null;
+    }
+    throw err;
   }
 }
 
@@ -218,11 +256,15 @@ export async function reloadFromBlob(): Promise<void> {
     }
     if (!data) return;
     const SqlJs = await getSqlJs();
+    const oldDb = _db;
     const db = new SqlJs.Database(new Uint8Array(data));
     await ensureSchema(db);
     _db = db;
     _dbPromise = null;
     _dirty = false;
+    if (oldDb) {
+      try { oldDb.close(); } catch { /* ignore */ }
+    }
   } catch (e) {
     console.error('[DB] reload failed (non-fatal):', (e as Error).message);
   }

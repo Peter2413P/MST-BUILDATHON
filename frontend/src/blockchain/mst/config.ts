@@ -40,7 +40,7 @@ export const ACTIVE_NETWORK = MST_TESTNET_CONFIG;
 // All job payments are held here before agent orchestration & split settlement
 export const PLATFORM_ESCROW_WALLET =
   process.env.NEXT_PUBLIC_MST_PLATFORM_WALLET ||
-  '0x6001712aE72d24BAbC386866D035B6D55331E634';
+  '0x6001712aE72d24Babc386866d035b6d55331E634';
 
 export const MST_CHAIN_PARAMS = {
   chainId: ACTIVE_NETWORK.chainIdHex,

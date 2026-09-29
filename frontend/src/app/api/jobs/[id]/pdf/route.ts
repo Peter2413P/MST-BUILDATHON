@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query, reloadFromBlob } from '@/lib/server/db';
 import { getExplorerUrl } from '@/blockchain/mst';
-import { extractMultiArtifacts, isValidChartSpec, isValidTableSpec, isValidFactCheckSpec, isFactCheckArray, normalizeArtifact } from '@/lib/artifacts/normalizer';
-import type { ChartSpec, TableSpec, FactCheckSpec } from '@/lib/artifacts/types';
+import { extractMultiArtifacts, isValidChartSpec, isValidTableSpec, isValidFactCheckSpec, isFactCheckArray, isValidWebsiteSpec, normalizeArtifact } from '@/lib/artifacts/normalizer';
+import type { ChartSpec, TableSpec, FactCheckSpec, WebsiteSpec } from '@/lib/artifacts/types';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type PDFDoc = any;
@@ -13,6 +13,38 @@ export const runtime = 'nodejs';
 function truncateTx(tx: string) {
   if (!tx) return '';
   return `${tx.slice(0, 14)}…${tx.slice(-10)}`;
+}
+
+function drawVectorWebsite(doc: PDFDoc, site: WebsiteSpec) {
+  if (doc.y > 620) {
+    doc.addPage();
+    doc.y = 50;
+  }
+
+  const boxY = doc.y;
+  const brand = site.brand || site.name || 'E-Commerce Website';
+
+  doc.roundedRect(50, boxY, 495, 110, 6).fill('#0f172a');
+  doc.roundedRect(50, boxY, 495, 110, 6).strokeColor('#334155').lineWidth(1).stroke();
+
+  // Header Title
+  doc.fontSize(12).font('Helvetica-Bold').fillColor('#f8fafc').text(`✓ Website Built — ${brand}`, 65, boxY + 12);
+  doc.fontSize(8.5).font('Helvetica').fillColor('#94a3b8').text(`Category: ${site.category || "Men's Fashion"}   ·   Status: Build ${site.buildStatus?.toUpperCase() || 'PASSED'}   ·   Debug Retries: ${site.debugAttempts ?? 0}`, 65, boxY + 28);
+
+  // Pages grid
+  doc.fontSize(9).font('Helvetica-Bold').fillColor('#e2e8f0').text('Generated Store Pages:', 65, boxY + 46);
+  const pages = (site.pages || []).slice(0, 6);
+  pages.forEach((p, idx) => {
+    const col = idx % 2;
+    const row = Math.floor(idx / 2);
+    const px = 65 + col * 230;
+    const py = boxY + 62 + row * 14;
+    doc.fontSize(8).font('Helvetica').fillColor('#10b981').text(`✓ ${p.name}`, px, py, { continued: true });
+    doc.fillColor('#64748b').text(`  (${p.path})`);
+  });
+
+  doc.y = boxY + 120;
+  doc.moveDown(0.5);
 }
 
 function drawVectorFactCheck(doc: PDFDoc, factCheck: FactCheckSpec) {
@@ -409,7 +441,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         }
 
         for (const art of composite.artifacts) {
-          if (art.type === 'fact_check' && (isValidFactCheckSpec(art.data) || isFactCheckArray((art.data as any)?.items || art.data))) {
+          if (art.type === 'website' && isValidWebsiteSpec(art.data)) {
+            drawVectorWebsite(doc, art.data);
+          } else if (art.type === 'fact_check' && (isValidFactCheckSpec(art.data) || isFactCheckArray((art.data as any)?.items || art.data))) {
             const spec: FactCheckSpec = isValidFactCheckSpec(art.data)
               ? art.data
               : { type: 'fact_check', items: Array.isArray(art.data) ? art.data : (art.data as any)?.items || [] };

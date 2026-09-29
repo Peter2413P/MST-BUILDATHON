@@ -4,6 +4,7 @@ const SKILLS = [
   'summarizer', 'code-review', 'research', 'translate',
   'sentiment', 'sql', 'chart', 'extract',
   'legal-review', 'finance', 'transcribe', 'fact-check',
+  'ecommerce-builder',
 ];
 
 export interface SubtaskPlan {
@@ -102,7 +103,67 @@ Rules:
     console.log(`[Planner] ${plan.subtasks.length} subtasks via ${servedBy}: ${plan.reasoning}`);
     return plan;
   } catch (err) {
-    console.error('[Planner] Decomposition failed, using fallback:', (err as Error).message);
+    console.error('[Planner] Decomposition failed, using intelligent fallback:', (err as Error).message);
+
+    const lower = description.toLowerCase();
+
+    // 1. E-Commerce Website Builder matching
+    if (
+      lower.includes('e-commerce') ||
+      lower.includes('ecommerce') ||
+      lower.includes('website') ||
+      lower.includes('storefront') ||
+      lower.includes('fashion brand') ||
+      lower.includes('online store') ||
+      lower.includes('next.js store') ||
+      lower.includes('checkout')
+    ) {
+      return {
+        subtasks: [
+          {
+            id: 'task_1',
+            skill: 'ecommerce-builder',
+            prompt: description,
+            dependencies: [],
+            optional: false,
+            complexity_weight: 2.5,
+            position: 1,
+          },
+        ],
+        reasoning: 'Domain match: E-Commerce Website Builder Agent for end-to-end storefront design and generation.',
+      };
+    }
+
+    // 2. Fact Check matching
+    if (lower.includes('fact-check') || lower.includes('fact check') || lower.includes('verify claims')) {
+      return {
+        subtasks: [
+          {
+            id: 'task_1',
+            skill: 'fact-check',
+            prompt: description,
+            dependencies: [],
+            optional: false,
+            complexity_weight: 1.2,
+            position: 1,
+          },
+        ],
+        reasoning: 'Domain match: Fact Check Agent for claim verification.',
+      };
+    }
+
+    // 3. Chart & Visual matching
+    if (lower.includes('chart') || lower.includes('plot') || lower.includes('graph')) {
+      return {
+        subtasks: [
+          { id: 'task_1', skill: 'finance', prompt: `Analyze and calculate: ${description}`, dependencies: [], optional: false, complexity_weight: 1.0, position: 1 },
+          { id: 'task_2', skill: 'chart', prompt: `Generate chart for: ${description}`, dependencies: ['task_1'], optional: false, complexity_weight: 1.0, position: 2 },
+        ],
+        reasoning: 'Domain match: Finance calculation (task_1) then Chart visualization (task_2).',
+      };
+    }
+
+    // Default Fallback
     return {
       subtasks: [
         { id: 'task_1', skill: 'research', prompt: `Research: ${description}`, dependencies: [], optional: false, complexity_weight: 1.5, position: 1 },

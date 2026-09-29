@@ -8,8 +8,8 @@ import type { SubtaskStatus, ValidationStatus } from '../types';
 const SLASH_AMOUNT = 0.01;
 const MIN_BOND = 0.01;
 const MAX_RETRIES = 1;
-const SUBTASK_TIMEOUT_MS = 25_000;
-const JOB_TIMEOUT_MS = 60_000;
+const SUBTASK_TIMEOUT_MS = 60_000;
+const JOB_TIMEOUT_MS = 180_000;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMsg: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -233,6 +233,18 @@ function validateAgentOutput(
         }
         break;
       }
+
+      case 'ecommerce-builder': {
+        const hasWebsite = /type.*website|pages|files|package\.json|Next\.js|buildStatus/i.test(trimmed);
+        if (!hasWebsite) {
+          return {
+            isValid: false,
+            errorType: 'empty_output',
+            errorMessage: 'ECommerce website builder agent did not produce website deliverable artifact.',
+          };
+        }
+        break;
+      }
     }
   }
 
@@ -355,7 +367,7 @@ function scoreAndAllocate(subtasks: DAGTaskNode[], totalBudget: number): ScoredR
 /**
  * Main Autonomous Job Orchestration Engine (DAG & Fail-Fast).
  */
-export async function runJob(jobId: string, description: string) {
+export async function runJob(jobId: string, description: string, sessionId?: string) {
   // Fetch buyer tx if previously recorded
   const jobRows = await query('SELECT buyer_tx FROM jobs WHERE id = ?', [jobId]);
   const buyerTx = (jobRows[0]?.buyer_tx as string) ?? null;
@@ -720,10 +732,14 @@ export async function runJob(jobId: string, description: string) {
       subtaskId: st.id,
     }));
 
-    const { txMap, settledAt, demo } = await executeMstAgentSplits(splits, jobId, buyerTx);
+    const { txMap, settledAt, verifiedOnChain, primaryTxHash } = await executeMstAgentSplits(splits, jobId, buyerTx, totalCost);
+
+    // Fetch payer_address from job
+    const jobPayerRows = (await query('SELECT payer_address FROM jobs WHERE id = ?', [jobId])) as unknown as { payer_address?: string }[];
+    const payerAddr = jobPayerRows[0]?.payer_address || '0x6001712aE72d24Babc386866d035b6d55331E634';
 
     for (const st of allocated) {
-      const txHash = txMap[st.agent_id] ?? buyerTx ?? null;
+      const txHash = txMap[st.agent_id] ?? (verifiedOnChain ? primaryTxHash : null);
       await exec(
         'UPDATE subtasks SET contribution_pct = ?, payment_usdc = ?, payment_tx = ?, status = ? WHERE id = ?',
         [st.contribution_pct, st.payment_usdc, txHash, 'settled', st.id]
@@ -732,25 +748,48 @@ export async function runJob(jobId: string, description: string) {
         'UPDATE agents SET total_earned = total_earned + ?, total_jobs = total_jobs + 1, last_active = ? WHERE id = ?',
         [st.payment_usdc, new Date().toISOString(), st.agent_id]
       );
-      await exec(
-        'INSERT INTO transactions (id, job_id, agent_id, amount_usdc, tx_hash, demo) VALUES (?, ?, ?, ?, ?, ?)',
-        [uuidv4(), jobId, st.agent_id, st.payment_usdc, txHash, demo ? 1 : 0]
-      );
+
+      if (txHash) {
+        await exec(
+          'INSERT INTO transactions (id, job_id, agent_id, amount_usdc, tx_hash, demo, from_address) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [uuidv4(), jobId, st.agent_id, st.payment_usdc, txHash, 0, payerAddr]
+        );
+      }
+
+      const agentName = completedNodes.find(n => n.agentId === st.agent_id)?.agentName || st.agent_id;
+      console.log(`[Settlement] Agent ${agentName}: ${st.payment_usdc.toFixed(4)} MSTC`);
     }
 
-    await exec('UPDATE jobs SET status = ?, completed_at = ?, result = ?, error = NULL WHERE id = ?', [
+    console.log(`[Settlement] Total: ${totalCost.toFixed(4)} MSTC`);
+    console.log(`[Settlement] Verified On-Chain: ${verifiedOnChain ? 'YES' : 'NO'}`);
+    console.log(`[Settlement] Transaction: ${primaryTxHash || 'NONE'}`);
+
+    if (sessionId) {
+      try {
+        const { deductSessionSpend } = await import('./auth');
+        deductSessionSpend(sessionId, totalCost);
+      } catch {
+        // Non-blocking
+      }
+    }
+
+    const jobSettlementStatus = verifiedOnChain ? 'settled' : (buyerTx ? 'payment_verification_failed' : 'session_authorized');
+
+    await exec('UPDATE jobs SET status = ?, payment_status = ?, buyer_tx = ?, completed_at = ?, result = ?, error = NULL WHERE id = ?', [
       'completed',
+      jobSettlementStatus,
+      verifiedOnChain ? primaryTxHash : null,
       settledAt,
       finalResult,
       jobId,
     ]);
-    console.log(`[MST Settlement] Job ${jobId} settled: ${totalCost} MSTC across ${allocated.length} agents`);
+    console.log(`[MST Settlement] Job ${jobId} finished: ${totalCost} MSTC across ${allocated.length} agents (Status: ${jobSettlementStatus})`);
     await flushNow();
   } catch (settleErr) {
     console.error(`[Job ${jobId}] Settlement failed:`, (settleErr as Error).message);
     await exec(
-      'UPDATE jobs SET status = ?, completed_at = ?, result = ? WHERE id = ?',
-      ['completed', new Date().toISOString(), finalResult, jobId]
+      'UPDATE jobs SET status = ?, payment_status = ?, completed_at = ?, result = ? WHERE id = ?',
+      ['completed', 'payment_failed', new Date().toISOString(), finalResult, jobId]
     );
     await flushNow();
   }
@@ -852,8 +891,8 @@ export async function runDirectJob(jobId: string, description: string, agentId: 
 
   try {
     const splits = [{ agentId, walletAddress: agent.wallet_address, mstcAmount: totalCost, subtaskId: stId }];
-    const { txMap, settledAt, demo } = await executeMstAgentSplits(splits, jobId, buyerTx);
-    const txHash = txMap[agentId] ?? buyerTx ?? null;
+    const { txMap, settledAt, verifiedOnChain, primaryTxHash } = await executeMstAgentSplits(splits, jobId, buyerTx, totalCost);
+    const txHash = txMap[agentId] ?? (verifiedOnChain ? primaryTxHash : null);
 
     await exec(
       'UPDATE subtasks SET contribution_pct = ?, payment_usdc = ?, payment_tx = ?, status = ? WHERE id = ?',
@@ -863,15 +902,34 @@ export async function runDirectJob(jobId: string, description: string, agentId: 
       'UPDATE agents SET total_earned = total_earned + ?, total_jobs = total_jobs + 1, last_active = ? WHERE id = ?',
       [totalCost, new Date().toISOString(), agentId]
     );
-    await exec(
-      'INSERT INTO transactions (id, job_id, agent_id, amount_usdc, tx_hash, demo) VALUES (?, ?, ?, ?, ?, ?)',
-      [uuidv4(), jobId, agentId, totalCost, txHash, demo ? 1 : 0]
-    );
-    await exec('UPDATE jobs SET status = ?, completed_at = ?, result = ? WHERE id = ?', ['completed', settledAt, finalResult, jobId]);
+
+    if (txHash) {
+      await exec(
+        'INSERT INTO transactions (id, job_id, agent_id, amount_usdc, tx_hash, demo) VALUES (?, ?, ?, ?, ?, ?)',
+        [uuidv4(), jobId, agentId, totalCost, txHash, 0]
+      );
+    }
+
+    const jobSettlementStatus = verifiedOnChain ? 'settled' : (buyerTx ? 'payment_verification_failed' : 'session_authorized');
+
+    await exec('UPDATE jobs SET status = ?, payment_status = ?, buyer_tx = ?, completed_at = ?, result = ? WHERE id = ?', [
+      'completed',
+      jobSettlementStatus,
+      verifiedOnChain ? primaryTxHash : null,
+      settledAt,
+      finalResult,
+      jobId,
+    ]);
     await flushNow();
   } catch (err) {
     console.error(`[DirectJob ${jobId}] Settlement failed:`, (err as Error).message);
-    await exec('UPDATE jobs SET status = ?, completed_at = ?, result = ? WHERE id = ?', ['completed', new Date().toISOString(), finalResult, jobId]);
+    await exec('UPDATE jobs SET status = ?, payment_status = ?, completed_at = ?, result = ? WHERE id = ?', [
+      'completed',
+      'payment_failed',
+      new Date().toISOString(),
+      finalResult,
+      jobId,
+    ]);
     await flushNow();
   }
 }

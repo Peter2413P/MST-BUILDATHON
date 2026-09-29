@@ -22,7 +22,16 @@ import {
   type RawEIP1193Provider,
 } from '@/blockchain/mst';
 
-// ── Step state ───────────────────────────────────────────────────────────────
+export type UIAuthState =
+  | 'DISCONNECTED'
+  | 'CONNECTING'
+  | 'WALLET_CONNECTED'
+  | 'AUTHENTICATING'
+  | 'AUTHENTICATED'
+  | 'PAYMENT_AUTHORIZATION_REQUIRED'
+  | 'READY';
+
+// Modal steps
 type Step =
   | { kind: 'idle' }
   | { kind: 'picking'; list: DetectedProvider[] }
@@ -30,9 +39,18 @@ type Step =
   | { kind: 'conn-failed'; message: string }
   | { kind: 'need-network'; p: DetectedProvider; addr: string }
   | { kind: 'switching'; p: DetectedProvider; addr: string; adding: boolean }
-  | { kind: 'net-failed'; p: DetectedProvider; addr: string; message: string };
+  | { kind: 'net-failed'; p: DetectedProvider; addr: string; message: string }
+  | { kind: 'sign-auth'; p: DetectedProvider; addr: string; nonce: string; message: string }
+  | { kind: 'auth-failed'; message: string }
+  | { kind: 'authorize-payment'; sessionId: string; addr: string };
 
-// ── Wallet context ───────────────────────────────────────────────────────────
+export interface SessionBudget {
+  autoPaymentEnabled: boolean;
+  sessionLimit: number;
+  sessionSpent: number;
+  remaining: number;
+}
+
 export interface WalletState {
   address: string | null;
   balance: string | null;
@@ -41,10 +59,18 @@ export interface WalletState {
   explorerUrl: string;
   faucetUrl: string;
   connecting: boolean;
+  authState: UIAuthState;
+  sessionId: string | null;
+  authenticated: boolean;
+  autoPaymentEnabled: boolean;
+  sessionBudget: SessionBudget;
   connect: () => void;
+  authenticate: () => Promise<boolean>;
+  authorizeAutoPayments: (maxSpendMstc?: number) => Promise<boolean>;
   disconnect: () => void;
   sendPayment: (amountMstc: string, description?: string) => Promise<string>;
   refreshBalance: () => Promise<void>;
+  refreshSessionStatus: () => Promise<void>;
 }
 
 const WalletCtx = createContext<WalletState>({
@@ -55,22 +81,40 @@ const WalletCtx = createContext<WalletState>({
   explorerUrl: ACTIVE_NETWORK.explorerUrl,
   faucetUrl: ACTIVE_NETWORK.faucetUrl,
   connecting: false,
+  authState: 'DISCONNECTED',
+  sessionId: null,
+  authenticated: false,
+  autoPaymentEnabled: false,
+  sessionBudget: { autoPaymentEnabled: false, sessionLimit: 0, sessionSpent: 0, remaining: 0 },
   connect: () => {},
+  authenticate: async () => false,
+  authorizeAutoPayments: async () => false,
   disconnect: () => {},
   sendPayment: async () => {
     throw new Error('Wallet not connected');
   },
   refreshBalance: async () => {},
+  refreshSessionStatus: async () => {},
 });
 
-// ── WalletProvider ───────────────────────────────────────────────────────────
 export function WalletProvider({ children }: { children: ReactNode }) {
+  // In-memory authentication state (Reset on page refresh)
   const [address, setAddress] = useState<string | null>(null);
   const [balance, setBalance] = useState<string | null>(null);
   const [activeProvider, setActiveProvider] = useState<RawEIP1193Provider | null>(null);
+  const [activeDetectedProvider, setActiveDetectedProvider] = useState<DetectedProvider | null>(null);
   const [step, setStep] = useState<Step>({ kind: 'idle' });
 
-  const connecting = step.kind === 'connecting' || step.kind === 'switching';
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [authState, setAuthState] = useState<UIAuthState>('DISCONNECTED');
+  const [sessionBudget, setSessionBudget] = useState<SessionBudget>({
+    autoPaymentEnabled: false,
+    sessionLimit: 0,
+    sessionSpent: 0,
+    remaining: 0,
+  });
+
+  const connecting = step.kind === 'connecting' || step.kind === 'switching' || authState === 'CONNECTING' || authState === 'AUTHENTICATING';
 
   const refreshBalance = useCallback(
     async (addr?: string) => {
@@ -86,25 +130,58 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     [address]
   );
 
+  const refreshSessionStatus = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      const res = await fetch(`/api/payment/session-status?sessionId=${sessionId}`, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.authenticated) {
+          setSessionBudget({
+            autoPaymentEnabled: Boolean(data.autoPaymentEnabled),
+            sessionLimit: data.sessionLimit || 0,
+            sessionSpent: data.sessionSpent || 0,
+            remaining: data.remaining || 0,
+          });
+          if (data.autoPaymentEnabled) {
+            setAuthState('READY');
+          }
+        }
+      }
+    } catch {
+      // Non-blocking
+    }
+  }, [sessionId]);
+
   function showConnFailed(message: string) {
     setStep({ kind: 'conn-failed', message });
-    setTimeout(() => setStep({ kind: 'idle' }), 3000);
+    setAuthState('DISCONNECTED');
+    setTimeout(() => setStep({ kind: 'idle' }), 3500);
   }
 
-  // ── STEP 1: request accounts ───────────────────────────────────────────────
+  function showAuthFailed(message: string) {
+    setStep({ kind: 'auth-failed', message });
+    setAuthState('WALLET_CONNECTED');
+    setTimeout(() => setStep({ kind: 'idle' }), 3500);
+  }
+
+  // ── Step 1: Connect Wallet ───────────────────────────────────────────────────
   async function doConnect(p: DetectedProvider) {
     setStep({ kind: 'connecting', p });
+    setAuthState('CONNECTING');
     let addr: string;
+
     try {
       addr = await connectEip1193(p.raw);
       if (!addr) {
         setStep({ kind: 'idle' });
+        setAuthState('DISCONNECTED');
         return;
       }
     } catch (err: unknown) {
       const code = (err as { code?: number })?.code;
       if (code === 4001) {
-        showConnFailed('Connection declined in wallet.');
+        showConnFailed('Connection request declined in wallet.');
       } else if (code === -32002) {
         showConnFailed('A connection request is already pending in your wallet.');
       } else {
@@ -115,37 +192,145 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     setAddress(addr);
     setActiveProvider(p.raw);
-    setStep({ kind: 'idle' });
+    setActiveDetectedProvider(p);
     fetchMstcBalance(addr).then(setBalance).catch(() => setBalance('0.0000'));
 
-    // ── STEP 2: check if on MST Testnet ───────────────────────────────────────
+    // Step 2: Validate MST Testnet
     try {
       const onMst = await isMstNetwork(p.raw);
       if (!onMst) {
         setStep({ kind: 'need-network', p, addr });
+        return;
       }
     } catch {
       // ignore
     }
+
+    setAuthState('WALLET_CONNECTED');
+    // Prompt Step 3: Authenticate
+    void startAuthFlow(p, addr);
   }
 
-  // ── STEP 2: switch to MST Testnet ──────────────────────────────────────────
+  // ── Step 2: Switch Network ───────────────────────────────────────────────────
   async function doSwitchNetwork(p: DetectedProvider, addr: string) {
     setStep({ kind: 'switching', p, addr, adding: false });
     try {
       await switchOrAddMstNetwork(p.raw);
-      setStep({ kind: 'idle' });
       fetchMstcBalance(addr).then(setBalance).catch(() => setBalance('0.0000'));
+      setAuthState('WALLET_CONNECTED');
+      // Proceed to authentication after network switch
+      void startAuthFlow(p, addr);
     } catch (err: unknown) {
       const msg = (err as Error)?.message ?? 'Network switch failed.';
       setStep({ kind: 'net-failed', p, addr, message: msg });
     }
   }
 
+  // ── Step 3: Nonce & Signature Authentication ─────────────────────────────────
+  async function startAuthFlow(p: DetectedProvider, addr: string) {
+    try {
+      setAuthState('AUTHENTICATING');
+      const nonceRes = await fetch('/api/auth/nonce', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ walletAddress: addr }),
+      });
+
+      if (!nonceRes.ok) throw new Error('Failed to retrieve authentication nonce');
+      const { nonce, message } = await nonceRes.json();
+
+      setStep({ kind: 'sign-auth', p, addr, nonce, message });
+    } catch (err) {
+      showAuthFailed((err as Error).message || 'Failed to start authentication');
+    }
+  }
+
+  async function executeSignature(p: DetectedProvider, addr: string, message: string) {
+    try {
+      const signature = await p.raw.request<string>({
+        method: 'personal_sign',
+        params: [message, addr],
+      });
+
+      if (!signature) {
+        throw new Error('Signature cancelled');
+      }
+
+      // Verify signature on backend
+      const verifyRes = await fetch('/api/auth/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ walletAddress: addr, signature }),
+      });
+
+      if (!verifyRes.ok) {
+        const errData = await verifyRes.json();
+        throw new Error(errData.error || 'Authentication verification failed');
+      }
+
+      const sessionData = await verifyRes.json();
+      setSessionId(sessionData.sessionId);
+      setAuthState('PAYMENT_AUTHORIZATION_REQUIRED');
+
+      // Prompt Step 4: Authorize automatic task payment
+      setStep({ kind: 'authorize-payment', sessionId: sessionData.sessionId, addr });
+    } catch (err: unknown) {
+      const code = (err as { code?: number })?.code;
+      if (code === 4001) {
+        showAuthFailed('Signature was declined. Authentication cancelled.');
+      } else {
+        showAuthFailed((err as Error).message || 'Signature verification failed.');
+      }
+    }
+  }
+
+  // ── Step 4: Authorize Session Auto-Payments ──────────────────────────────────
+  const authorizeAutoPayments = useCallback(
+    async (maxSpendMstc: number = 1.0): Promise<boolean> => {
+      if (!sessionId) return false;
+      try {
+        const res = await fetch('/api/payment/session-authorize', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${sessionId}`,
+          },
+          body: JSON.stringify({ sessionId, maxSpendMstc }),
+        });
+
+        if (!res.ok) throw new Error('Failed to authorize session payments');
+        const data = await res.json();
+
+        setSessionBudget({
+          autoPaymentEnabled: true,
+          sessionLimit: data.sessionLimit,
+          sessionSpent: data.sessionSpent,
+          remaining: data.remaining,
+        });
+
+        setAuthState('READY');
+        setStep({ kind: 'idle' });
+        return true;
+      } catch (err) {
+        console.error('[Payment Authorization] Failed:', err);
+        return false;
+      }
+    },
+    [sessionId]
+  );
+
+  const authenticate = useCallback(async (): Promise<boolean> => {
+    if (activeDetectedProvider && address) {
+      await startAuthFlow(activeDetectedProvider, address);
+      return true;
+    }
+    return false;
+  }, [activeDetectedProvider, address]);
+
   const connect = useCallback(() => {
     const list = detectProviders();
     if (list.length === 0) {
-      alert('No EVM wallet extension found. Please install MetaMask, Rabby, BridgeKey, or an EIP-1193 compatible wallet.');
+      alert('No EVM wallet extension found. Please install MetaMask, Rabby, or an EIP-1193 compatible wallet.');
       return;
     }
     if (list.length === 1) {
@@ -153,55 +338,84 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     } else {
       setStep({ kind: 'picking', list });
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const disconnect = useCallback(() => {
+    if (sessionId) {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, walletAddress: address }),
+      }).catch(() => {});
+    }
+
     setAddress(null);
     setBalance(null);
     setActiveProvider(null);
+    setActiveDetectedProvider(null);
+    setSessionId(null);
+    setAuthState('DISCONNECTED');
+    setSessionBudget({ autoPaymentEnabled: false, sessionLimit: 0, sessionSpent: 0, remaining: 0 });
     setStep({ kind: 'idle' });
-  }, []);
+  }, [sessionId, address]);
 
   const sendPayment = useCallback(
-    async (amountMstc: string, _desc?: string): Promise<string> => {
-      // If activeProvider is not set yet but window.ethereum exists, fallback to window.ethereum
-      const provider = activeProvider || (typeof window !== 'undefined' ? window.ethereum : null);
+    async (amountMstc: string, desc?: string): Promise<string> => {
+      const provider =
+        activeProvider ||
+        (typeof window !== 'undefined' ? (window as unknown as { ethereum?: RawEIP1193Provider }).ethereum : null);
       if (!address || !provider) throw new Error('Wallet not connected');
 
-      // Execute native MSTC transfer on MST Testnet
-      const txHash = await executeMstPayment(provider, address, amountMstc);
+      const txHash = await executeMstPayment(provider, address, amountMstc, undefined, desc);
       try {
         await refreshBalance(address);
+        await refreshSessionStatus();
       } catch {
         /* non-critical */
       }
       return txHash;
     },
-    [address, activeProvider, refreshBalance]
+    [address, activeProvider, refreshBalance, refreshSessionStatus]
   );
 
-  // ── Account change listener ────────────────────────────────────────────────
-  // Only updates address if an actual valid new account is provided.
-  // Does NOT disconnect on spurious empty arrays or background bridge events during navigation.
+  // ── Account Change Listener ──────────────────────────────────────────────────
   useEffect(() => {
     if (!activeProvider) return;
+
     const handler = async (accounts: unknown) => {
       const list = accounts as string[];
       if (list && Array.isArray(list) && list.length > 0 && typeof list[0] === 'string' && list[0].startsWith('0x')) {
         const newAddr = list[0];
-        setAddress(newAddr);
-        try {
-          const bal = await fetchMstcBalance(newAddr);
-          setBalance(bal);
-        } catch {
-          setBalance('0.0000');
+        if (address && newAddr.toLowerCase() !== address.toLowerCase()) {
+          console.log(`[Auth] Account changed from ${address} to ${newAddr}. Invalidating session.`);
+          // Invalidate old session
+          if (sessionId) {
+            fetch('/api/auth/logout', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId, walletAddress: address }),
+            }).catch(() => {});
+          }
+
+          setSessionId(null);
+          setAddress(newAddr);
+          setAuthState('WALLET_CONNECTED');
+          setSessionBudget({ autoPaymentEnabled: false, sessionLimit: 0, sessionSpent: 0, remaining: 0 });
+
+          // Start fresh authentication for Wallet B
+          if (activeDetectedProvider) {
+            void startAuthFlow(activeDetectedProvider, newAddr);
+          }
         }
+      } else {
+        // Disconnected in wallet
+        disconnect();
       }
-      // Note: Do not disconnect on empty list — stay connected for current session until page is refreshed.
     };
+
     activeProvider.on('accountsChanged', handler);
     return () => activeProvider.removeListener('accountsChanged', handler);
-  }, [activeProvider]);
+  }, [activeProvider, address, sessionId, activeDetectedProvider, disconnect]);
 
   const ctxValue = useMemo(
     () => ({
@@ -212,12 +426,34 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       explorerUrl: ACTIVE_NETWORK.explorerUrl,
       faucetUrl: ACTIVE_NETWORK.faucetUrl,
       connecting,
+      authState,
+      sessionId,
+      authenticated: authState === 'AUTHENTICATED' || authState === 'PAYMENT_AUTHORIZATION_REQUIRED' || authState === 'READY',
+      autoPaymentEnabled: sessionBudget.autoPaymentEnabled,
+      sessionBudget,
       connect,
+      authenticate,
+      authorizeAutoPayments,
       disconnect,
       sendPayment,
       refreshBalance,
+      refreshSessionStatus,
     }),
-    [address, balance, connecting, connect, disconnect, sendPayment, refreshBalance]
+    [
+      address,
+      balance,
+      connecting,
+      authState,
+      sessionId,
+      sessionBudget,
+      connect,
+      authenticate,
+      authorizeAutoPayments,
+      disconnect,
+      sendPayment,
+      refreshBalance,
+      refreshSessionStatus,
+    ]
   );
 
   const modalVisible = step.kind !== 'idle';
@@ -225,7 +461,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     step.kind === 'picking' ||
     step.kind === 'conn-failed' ||
     step.kind === 'need-network' ||
-    step.kind === 'net-failed';
+    step.kind === 'net-failed' ||
+    step.kind === 'auth-failed';
 
   return (
     <WalletCtx.Provider value={ctxValue}>
@@ -251,21 +488,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 4 }}
               transition={{ duration: 0.14 }}
-              className="bg-[#0d0d14] border border-[rgba(239,159,39,0.3)] rounded-2xl p-6 w-full max-w-sm shadow-2xl"
+              className="bg-[#0e110d] dark:bg-[#121411] border border-[#3d6a00]/40 dark:border-[#B8FF00]/30 rounded-2xl p-6 w-full max-w-sm shadow-2xl text-[#121511] dark:text-[#F5F7F2]"
               onClick={e => e.stopPropagation()}
             >
-              {/* STEP 1a: Picker */}
+              {/* STEP 1: Provider Picker */}
               {step.kind === 'picking' && (
                 <>
                   <div className="flex items-start justify-between mb-4">
                     <div>
-                      <p className="text-[10px] font-mono text-[#ef9f27] mb-0.5">MST BLOCKCHAIN</p>
+                      <p className="text-[10px] font-mono text-[#a8f000] dark:text-[#B8FF00] mb-0.5">MST BLOCKCHAIN</p>
                       <h2 className="text-white font-bold text-base">Connect MST Wallet</h2>
-                      <p className="text-[#8e8e9f] text-xs mt-0.5">Select your Web3 wallet extension</p>
+                      <p className="text-[#8e9489] text-xs mt-0.5">Select your Web3 wallet extension</p>
                     </div>
                     <button
                       onClick={() => setStep({ kind: 'idle' })}
-                      className="text-[#5a5a6a] hover:text-white transition-colors text-lg leading-none mt-0.5"
+                      className="text-[#687062] hover:text-white transition-colors text-lg leading-none mt-0.5"
                     >
                       ✕
                     </button>
@@ -275,14 +512,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
                       <button
                         key={p.id}
                         onClick={() => void doConnect(p)}
-                        className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-[rgba(239,159,39,0.15)] hover:border-[rgba(239,159,39,0.5)] hover:bg-[rgba(239,159,39,0.08)] transition-all text-left group"
+                        className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-[#292E27] hover:border-[#B8FF00]/50 hover:bg-[#B8FF00]/10 transition-all text-left group cursor-pointer"
                       >
                         <span className="text-2xl shrink-0">{p.icon}</span>
                         <div className="min-w-0">
                           <div className="text-white font-medium text-sm">{p.name}</div>
-                          <div className="text-[#6a6a7c] text-[10px] font-mono">EIP-1193 · MST Compatible</div>
+                          <div className="text-[#8e9489] text-[10px] font-mono">EIP-1193 · MST Compatible</div>
                         </div>
-                        <span className="ml-auto text-[#6a6a7c] group-hover:text-[#ef9f27] transition-colors shrink-0">
+                        <span className="ml-auto text-[#8e9489] group-hover:text-[#B8FF00] transition-colors shrink-0">
                           →
                         </span>
                       </button>
@@ -291,97 +528,143 @@ export function WalletProvider({ children }: { children: ReactNode }) {
                 </>
               )}
 
-              {/* STEP 1b: Connecting */}
+              {/* Connecting indicator */}
               {step.kind === 'connecting' && (
                 <div className="text-center py-3">
-                  <div className="w-10 h-10 border-2 border-[rgba(239,159,39,0.2)] border-t-[#ef9f27] rounded-full animate-spin mx-auto mb-4" />
+                  <div className="w-10 h-10 border-2 border-[#B8FF00]/20 border-t-[#B8FF00] rounded-full animate-spin mx-auto mb-4" />
                   <div className="text-3xl mb-2">{step.p.icon}</div>
                   <p className="text-white font-semibold">Connecting to {step.p.name}</p>
-                  <p className="text-[#8e8e9f] text-xs mt-1.5 leading-relaxed">
-                    Approve the connection request in your wallet…
+                  <p className="text-[#8e9489] text-xs mt-1.5 leading-relaxed">
+                    Approve the connection request in your wallet extension…
                   </p>
                 </div>
               )}
 
-              {/* STEP 1 failed */}
+              {/* Connection failed */}
               {step.kind === 'conn-failed' && (
                 <div className="text-center py-3">
                   <div className="text-3xl mb-3">✕</div>
                   <p className="text-white font-semibold">Connection Failed</p>
-                  <p className="text-[#8e8e9f] text-xs mt-1.5 leading-relaxed">{step.message}</p>
+                  <p className="text-[#8e9489] text-xs mt-1.5 leading-relaxed">{step.message}</p>
                 </div>
               )}
 
-              {/* STEP 2a: Need MST Network */}
+              {/* Network switch requirement */}
               {step.kind === 'need-network' && (
                 <div className="text-center py-1">
                   <div className="text-3xl mb-3">⚡</div>
-                  <p className="text-[10px] font-mono text-[#ef9f27] mb-1">NETWORK SWITCH</p>
-                  <p className="text-white font-semibold">Switch to MST Testnet</p>
-                  <p className="text-[#8e8e9f] text-xs mt-2 leading-relaxed">
-                    AgentMesh settles real agent payments on <strong>MST Testnet</strong>.
+                  <p className="text-[10px] font-mono text-[#B8FF00] mb-1">NETWORK SETUP</p>
+                  <p className="text-white font-semibold text-base">Please switch to MST Testnet</p>
+                  <p className="text-[#8e9489] text-xs mt-2 leading-relaxed">
+                    AgentMesh operates on <strong>MST Testnet (Chain ID 91562037)</strong>.
                   </p>
-                  <div className="mt-4 rounded-xl bg-[#050508] border border-[rgba(239,159,39,0.15)] px-4 py-3 text-left">
-                    <div className="space-y-1.5 text-[11px] font-mono">
-                      {[
-                        ['Network', ACTIVE_NETWORK.chainName],
-                        ['Chain ID', `${ACTIVE_NETWORK.chainIdDecimal}`],
-                        ['Currency', '$MSTC'],
-                        ['RPC', 'testnetrpc.mstblockchain.com'],
-                        ['Explorer', 'testnet.mstscan.com'],
-                      ].map(([k, v]) => (
-                        <div key={k} className="flex justify-between gap-4">
-                          <span className="text-[#6a6a7c] shrink-0">{k}</span>
-                          <span className="text-white text-right break-all">{v}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
                   <button
                     onClick={() => void doSwitchNetwork(step.p, step.addr)}
-                    className="mt-4 w-full py-2.5 rounded-xl bg-[rgba(239,159,39,0.12)] border border-[rgba(239,159,39,0.6)] text-[#ef9f27] text-sm font-mono hover:bg-[rgba(239,159,39,0.22)] transition-colors font-bold"
+                    className="mt-5 w-full py-2.5 rounded-xl bg-[#B8FF00] text-black font-bold text-sm font-mono hover:bg-[#a8f000] transition-colors cursor-pointer"
                   >
-                    Add / Switch to MST Testnet →
+                    Switch to MST Testnet →
                   </button>
                   <button
                     onClick={() => setStep({ kind: 'idle' })}
-                    className="mt-2 w-full py-1.5 text-xs text-[#5a5a6a] hover:text-[#8e8e9f] transition-colors"
+                    className="mt-2 w-full py-1.5 text-xs text-[#8e9489] hover:text-white transition-colors cursor-pointer"
                   >
                     Dismiss
                   </button>
                 </div>
               )}
 
-              {/* STEP 2b: Switching */}
-              {step.kind === 'switching' && (
-                <div className="text-center py-3">
-                  <div className="w-10 h-10 border-2 border-[rgba(239,159,39,0.2)] border-t-[#ef9f27] rounded-full animate-spin mx-auto mb-4" />
-                  <div className="text-2xl mb-2">⚡</div>
-                  <p className="text-white font-semibold">Switching to MST Testnet…</p>
-                  <p className="text-[#8e8e9f] text-xs mt-1.5 leading-relaxed">
-                    Please approve the network configuration in {step.p.name}…
+              {/* STEP 3: Sign Authentication */}
+              {step.kind === 'sign-auth' && (
+                <div className="py-2 text-center">
+                  <div className="w-12 h-12 rounded-2xl bg-[#B8FF00]/15 border border-[#B8FF00]/30 flex items-center justify-center mx-auto mb-3 text-[#B8FF00]">
+                    <span className="material-symbols-outlined text-[24px]">key</span>
+                  </div>
+                  <p className="text-[10px] font-mono text-[#B8FF00] uppercase tracking-wider mb-1">Step 2 of 3 · Authentication</p>
+                  <h3 className="text-white font-bold text-base">Authenticate Session</h3>
+                  <p className="text-xs text-[#8e9489] mt-2 leading-relaxed font-sans">
+                    Sign this message to authenticate. No MSTC will be transferred.
                   </p>
+
+                  <div className="mt-3 p-3 rounded-xl bg-[#090b08] border border-[#292E27] text-left">
+                    <p className="text-[10px] font-mono text-[#8e9489] mb-1">Account:</p>
+                    <p className="text-[11px] font-mono text-white truncate">{step.addr}</p>
+                    <p className="text-[10px] font-mono text-[#8e9489] mt-2 mb-1">Signature Payload:</p>
+                    <p className="text-[10px] font-mono text-[#8e9489] line-clamp-2">{step.message}</p>
+                  </div>
+
+                  <button
+                    onClick={() => void executeSignature(step.p, step.addr, step.message)}
+                    className="mt-4 w-full py-2.5 rounded-xl bg-[#B8FF00] text-black font-bold text-xs font-mono hover:bg-[#a8f000] transition-all shadow-sm cursor-pointer"
+                  >
+                    Sign in Wallet (0 MSTC) →
+                  </button>
                 </div>
               )}
 
-              {/* STEP 2 failed */}
-              {step.kind === 'net-failed' && (
-                <div className="text-center py-1">
-                  <div className="text-3xl mb-3">⚠️</div>
-                  <p className="text-[10px] font-mono text-[#ef9f27] mb-1">NETWORK SETUP</p>
-                  <p className="text-white font-semibold">MST Testnet Required</p>
-                  <p className="text-[#ef4444] text-xs mt-2 leading-relaxed bg-red-950/30 border border-red-900/40 rounded-lg px-3 py-2">
-                    {step.message}
-                  </p>
+              {/* STEP 4: Session Payment Authorization */}
+              {step.kind === 'authorize-payment' && (
+                <div className="py-2">
+                  <div className="w-12 h-12 rounded-2xl bg-[#B8FF00]/15 border border-[#B8FF00]/30 flex items-center justify-center mx-auto mb-3 text-[#B8FF00]">
+                    <span className="material-symbols-outlined text-[24px]">flash_on</span>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-[10px] font-mono text-[#B8FF00] uppercase tracking-wider mb-1">Step 3 of 3 · Task Authorization</p>
+                    <h3 className="text-white font-bold text-base">Enable Automatic Task Payments</h3>
+                    <p className="text-xs text-[#8e9489] mt-1.5 leading-relaxed">
+                      AgentMesh can automatically settle eligible agent tasks during this session.
+                    </p>
+                  </div>
+
+                  <div className="mt-4 p-3.5 rounded-xl bg-[#090b08] border border-[#292E27] space-y-2">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-[#8e9489] font-mono">Session Limit:</span>
+                      <span className="text-white font-mono font-bold">1.0000 MSTC</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-[#8e9489] font-mono">Upfront Charge:</span>
+                      <span className="text-[#B8FF00] font-mono font-bold">0.0000 MSTC</span>
+                    </div>
+                    <p className="text-[10px] text-[#687062] pt-1 border-t border-[#1d221c] leading-relaxed">
+                      No payment is made during authorization. Micro-payments only trigger after successful task validation.
+                    </p>
+                  </div>
+
                   <button
-                    onClick={() => void doSwitchNetwork(step.p, step.addr)}
-                    className="mt-4 w-full py-2.5 rounded-xl border border-[rgba(239,159,39,0.6)] text-[#ef9f27] text-sm font-mono hover:bg-[rgba(239,159,39,0.15)] transition-colors"
+                    onClick={() => void authorizeAutoPayments(1.0)}
+                    className="mt-4 w-full py-2.5 rounded-xl bg-[#B8FF00] text-black font-bold text-xs font-mono hover:bg-[#a8f000] transition-all shadow-sm cursor-pointer"
                   >
-                    Try Again →
+                    Enable for this Session →
                   </button>
                   <button
                     onClick={() => setStep({ kind: 'idle' })}
-                    className="mt-2 w-full py-1.5 text-xs text-[#5a5a6a] hover:text-[#8e8e9f] transition-colors"
+                    className="mt-2 w-full py-1 text-xs text-[#687062] hover:text-[#8e9489] transition-colors cursor-pointer text-center block"
+                  >
+                    Decide later
+                  </button>
+                </div>
+              )}
+
+              {/* Authentication failure */}
+              {step.kind === 'auth-failed' && (
+                <div className="text-center py-3">
+                  <div className="text-3xl mb-3">⚠️</div>
+                  <p className="text-white font-semibold">Authentication Notice</p>
+                  <p className="text-[#8e9489] text-xs mt-1.5 leading-relaxed">{step.message}</p>
+                  <button
+                    onClick={() => {
+                      if (activeDetectedProvider && address) {
+                        void startAuthFlow(activeDetectedProvider, address);
+                      } else {
+                        setStep({ kind: 'idle' });
+                      }
+                    }}
+                    className="mt-4 w-full py-2.5 rounded-xl bg-[#B8FF00] text-black font-bold text-xs font-mono hover:bg-[#a8f000] transition-all shadow-sm cursor-pointer"
+                  >
+                    Request Fresh Nonce & Sign →
+                  </button>
+                  <button
+                    onClick={() => setStep({ kind: 'idle' })}
+                    className="mt-2 w-full py-1 text-xs text-[#687062] hover:text-[#8e9489] transition-colors cursor-pointer text-center block"
                   >
                     Dismiss
                   </button>

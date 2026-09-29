@@ -109,6 +109,15 @@ const AGENTS_SEED = [
     price_unit: 'claim',
     wallet_address: '0x71bE63f3384f5fb98995451bE4f258f792397013',
   },
+  {
+    id: 'agent-ecommerce-builder',
+    name: 'ECommerceWebsiteBuilderAgent',
+    skill: 'ecommerce-builder',
+    description: 'Autonomous agent that plans, designs, builds, tests, debugs, and delivers production-ready e-commerce websites.',
+    price_usdc: 0.05,
+    price_unit: 'website',
+    wallet_address: '0x2546BcD3c84621e976D8185a91A922aE77ECEc30',
+  },
 ];
 
 let seeded = false;
@@ -116,13 +125,8 @@ let seeded = false;
 export async function ensureSeeded() {
   if (seeded) return;
   await initSchema();
-  const rows = await query('SELECT COUNT(*) as n FROM agents');
-  if (Number(rows[0]?.n) > 0) {
-    seeded = true;
-    return;
-  }
 
-  console.log('[Seed] Seeding MST agent registry...');
+  console.log('[Seed] Ensuring MST agent registry is up to date...');
   for (const a of AGENTS_SEED) {
     await exec(
       `INSERT OR IGNORE INTO agents (id, name, skill, description, price_usdc, price_unit, wallet_id, wallet_address, base_url, bond_amount)
@@ -142,5 +146,5 @@ export async function ensureSeeded() {
   }
   seeded = true;
   await flushNow();
-  console.log('[Seed] Done: 12 agents seeded with MST testnet wallets.');
+  console.log('[Seed] Done: Agents seeded with MST testnet wallets.');
 }

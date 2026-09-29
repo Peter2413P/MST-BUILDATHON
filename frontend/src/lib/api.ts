@@ -36,13 +36,45 @@ export async function getMetrics(): Promise<Metrics> {
   return data;
 }
 
-export async function getTransactions(params?: { agent_id?: string; job_id?: string; limit?: number }) {
+export async function getTransactions(params?: { agent_id?: string; job_id?: string; limit?: number; address?: string }) {
   const { data } = await api.get('/transactions', { params });
   return data as Transaction[];
 }
 
 export async function getAgent(id: string): Promise<Agent> {
   const { data } = await api.get(`/agents/${id}`);
+  return data;
+}
+
+export interface ChatResponse {
+  intent: 'conversation' | 'task';
+  response?: string;
+  jobId?: string;
+  status?: string;
+  task_summary?: string;
+  buyer_tx?: string;
+  requires_execution: boolean;
+  requires_payment: boolean;
+  router?: {
+    intent: 'conversation' | 'task';
+    confidence: number;
+    reason: string;
+    requires_execution: boolean;
+    requires_payment: boolean;
+    task_summary: string | null;
+    context_required: boolean;
+  };
+}
+
+export async function sendChatMessage(params: {
+  message: string;
+  jobId?: string;
+  sessionId?: string;
+  history?: { role: 'user' | 'assistant'; content: string }[];
+  walletAddress?: string;
+  buyerTx?: string;
+}): Promise<ChatResponse> {
+  const { data } = await api.post('/chat', params);
   return data;
 }
 

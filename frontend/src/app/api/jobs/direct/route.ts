@@ -156,11 +156,32 @@ export async function POST(req: NextRequest) {
     }
 
     const jobId = uuidv4();
+
+    // Check if client provided a real on-chain transaction hash or broadcast via server signer
+    let finalTxHash = (buyerTx && buyerTx.startsWith('0x') && buyerTx.length === 66) ? buyerTx.trim() : null;
+    if (!finalTxHash) {
+      const { anchorQueryOnChain } = await import('@/lib/server/mst');
+      finalTxHash = await anchorQueryOnChain(jobId, description.trim(), payerAddress);
+    }
+
     directDedupCache.set(dedupKey, { jobId, ts: Date.now() });
     await exec(
-      "INSERT INTO jobs (id, description, status, job_type, direct_agent_id, buyer_tx) VALUES (?, ?, 'pending', 'direct', ?, ?)",
-      [jobId, description.trim(), agentId, buyerTx ?? null]
+      "INSERT INTO jobs (id, description, status, job_type, direct_agent_id, buyer_tx, payer_address, payment_status) VALUES (?, ?, 'pending', 'direct', ?, ?, ?, ?)",
+      [jobId, description.trim(), agentId, finalTxHash, payerAddress || null, finalTxHash ? 'confirming' : 'session_authorized']
     );
+
+    // Record initial direct query transaction in ledger only if real on-chain tx exists
+    if (finalTxHash) {
+      try {
+        await exec(
+          'INSERT INTO transactions (id, job_id, agent_id, amount_usdc, tx_hash, demo, from_address) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [uuidv4(), jobId, agentId, 0.01, finalTxHash, 0, payerAddress || '0x6001712aE72d24Babc386866d035b6d55331E634']
+        );
+      } catch {
+        // Non-blocking
+      }
+    }
+
     await flushNow();
 
     waitUntil((async () => {

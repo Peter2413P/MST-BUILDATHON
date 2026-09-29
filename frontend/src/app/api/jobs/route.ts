@@ -86,17 +86,37 @@ export async function POST(req: NextRequest) {
     }
 
     const jobId = uuidv4();
+
+    // Check if client provided a real on-chain transaction hash or broadcast via server signer
+    let finalTxHash = (buyer_tx && buyer_tx.startsWith('0x') && buyer_tx.length === 66) ? buyer_tx.trim() : null;
+    if (!finalTxHash) {
+      const { anchorQueryOnChain } = await import('@/lib/server/mst');
+      finalTxHash = await anchorQueryOnChain(jobId, description.trim(), payer_address);
+    }
+
     dedupCache.set(dedupKey, { jobId, ts: Date.now() });
-    console.log(`[Job ${jobId}] Creating — payer: ${payer_address ?? 'none'} buyer_tx: ${buyer_tx ?? 'none'}`);
+    console.log(`[Job ${jobId}] Creating — payer: ${payer_address ?? 'none'} on-chain tx: ${finalTxHash || 'NONE'}`);
 
     await exec(
-      'INSERT INTO jobs (id, description, status, buyer_tx) VALUES (?, ?, ?, ?)',
-      [jobId, description.trim(), 'pending', buyer_tx ?? null]
+      'INSERT INTO jobs (id, description, status, buyer_tx, payer_address, payment_status) VALUES (?, ?, ?, ?, ?, ?)',
+      [jobId, description.trim(), 'pending', finalTxHash, payer_address || null, finalTxHash ? 'confirming' : 'session_authorized']
     );
+
+    // Record initial on-chain query transaction in ledger only if real on-chain tx exists
+    if (finalTxHash) {
+      try {
+        await exec(
+          'INSERT INTO transactions (id, job_id, agent_id, amount_usdc, tx_hash, demo, from_address) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [uuidv4(), jobId, 'agent-summarizer', 0.01, finalTxHash, 0, payer_address || '0x6001712aE72d24Babc386866d035b6d55331E634']
+        );
+      } catch {
+        // Non-blocking
+      }
+    }
 
     // Flush to Vercel Blob immediately so any subsequent lambda can read this job.
     await flushNow();
-    console.log(`[Job ${jobId}] Persisted to blob, returning jobId to client`);
+    console.log(`[Job ${jobId}] Persisted to blob with on-chain tx ${finalTxHash}, returning jobId to client`);
 
     const runnerPromise = (async () => {
       try {

@@ -2,7 +2,14 @@
 
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
-import type { NormalizedArtifact, ChartSpec, TableSpec, CodeSpec, FactCheckSpec } from '@/lib/artifacts/types';
+import type {
+  NormalizedArtifact,
+  ChartSpec,
+  TableSpec,
+  CodeSpec,
+  FactCheckSpec,
+  WebsiteSpec,
+} from '@/lib/artifacts/types';
 import { extractMultiArtifacts, normalizeArtifact } from '@/lib/artifacts/normalizer';
 import ChartRenderer from './ChartRenderer';
 import TableRenderer from './TableRenderer';
@@ -12,6 +19,7 @@ import ImageRenderer from './ImageRenderer';
 import JsonRenderer from './JsonRenderer';
 import PdfRenderer from './PdfRenderer';
 import FactCheckRenderer from './FactCheckRenderer';
+import WebsiteArtifactRenderer from './WebsiteArtifactRenderer';
 
 interface ArtifactRendererProps {
   artifact?: NormalizedArtifact;
@@ -62,6 +70,7 @@ export default function ArtifactRenderer({
 function SingleArtifactRenderer({ artifact }: { artifact: NormalizedArtifact }) {
   if (process.env.NODE_ENV !== 'production') {
     const rendererMap: Record<string, string> = {
+      website: 'WebsiteArtifactRenderer',
       fact_check: 'FactCheckRenderer',
       chart: 'ChartRenderer',
       table: 'TableRenderer',
@@ -77,6 +86,15 @@ function SingleArtifactRenderer({ artifact }: { artifact: NormalizedArtifact }) 
   }
 
   switch (artifact.type) {
+    case 'website':
+      return (
+        <WebsiteArtifactRenderer
+          spec={artifact.data as WebsiteSpec}
+          rawJson={artifact.rawContent}
+          title={artifact.title}
+        />
+      );
+
     case 'fact_check':
       return (
         <FactCheckRenderer

@@ -6,3 +6,5 @@ node_modules/
 orchestrator/.env
 .env
 .vercel
+workspace/
+*.log
