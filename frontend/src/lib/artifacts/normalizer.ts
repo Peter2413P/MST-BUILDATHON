@@ -91,6 +91,17 @@ export function isValidWebsiteSpec(obj: unknown): obj is WebsiteSpec {
 }
 
 /**
+ * Validates whether an object is a well-formed ShoppingRecommendationArtifact.
+ */
+export function isValidShoppingSpec(obj: unknown): boolean {
+  if (!obj || typeof obj !== 'object') return false;
+  const cand = obj as Record<string, unknown>;
+  if (cand.type === 'shopping') return true;
+  if (cand.requirements && (Array.isArray(cand.rankedProducts) || cand.conflictDetails)) return true;
+  return false;
+}
+
+/**
  * Attempts to repair and salvage truncated Chart.js JSON string if possible.
  */
 function trySalvageChartJson(raw: string): ChartSpec | null {
@@ -399,6 +410,20 @@ export function normalizeArtifact(
       };
     }
 
+    if (isValidShoppingSpec(candObj)) {
+      if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: shopping');
+      return {
+        artifactId: id,
+        type: 'shopping',
+        title: (candObj.query as string) || defaultTitle || 'Shopping Recommendation',
+        mimeType: 'application/vnd.agentmesh.shopping+json',
+        rawContent: JSON.stringify(rawInput, null, 2),
+        data: rawInput as Record<string, unknown>,
+        sourceAgent,
+        status: candObj.status === 'error' ? 'failed' : 'completed',
+      };
+    }
+
     if (candObj.type === 'json' || candObj.type === 'data') {
       if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: json');
       return {
@@ -448,6 +473,7 @@ export function normalizeArtifact(
       for (const cand of candidates) {
         if (
           isValidWebsiteSpec(cand.parsed) ||
+          isValidShoppingSpec(cand.parsed) ||
           isFactCheckArray(cand.parsed) ||
           isValidFactCheckSpec(cand.parsed) ||
           isValidChartSpec(cand.parsed) ||
@@ -467,6 +493,22 @@ export function normalizeArtifact(
     }
 
     if (parsedJson) {
+      // 0. Shopping Spec
+      if (isValidShoppingSpec(parsedJson)) {
+        if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: shopping');
+        const shop = parsedJson as Record<string, unknown>;
+        return {
+          artifactId: id,
+          type: 'shopping',
+          title: (shop.query as string) || defaultTitle || 'Shopping Recommendation',
+          mimeType: 'application/vnd.agentmesh.shopping+json',
+          rawContent: jsonString || trimmed,
+          data: parsedJson as Record<string, unknown>,
+          sourceAgent,
+          status: shop.status === 'error' ? 'failed' : 'completed',
+        };
+      }
+
       // 1. Website Spec
       if (isValidWebsiteSpec(parsedJson)) {
         if (process.env.NODE_ENV !== 'production') console.log('[ArtifactNormalizer] Detected output type: website');

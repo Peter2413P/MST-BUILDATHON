@@ -31,14 +31,12 @@ const AGENTS_SEED = [
   { id: 'agent-finance',      name: 'FinanceAgent',      skill: 'finance',      description: 'Financial ratio analysis & KPI summary generation', price_usdc: 0.015, price_unit: 'report', base_url: 'http://localhost:4010', wallet_address: '0xa0Ee7A142d267C1f36714E4a8F75612F20a79720' },
   { id: 'agent-transcribe',   name: 'TranscribeAgent',   skill: 'transcribe',   description: 'Audio recordings → timestamped text transcripts', price_usdc: 0.01, price_unit: 'minute', base_url: 'http://localhost:4011', wallet_address: '0xBcd4042DE499D14e55001CcbB24a551F3b954096' },
   { id: 'agent-fact-check',   name: 'FactCheckAgent',    skill: 'fact-check',   description: 'Cross-reference claims against trusted sources', price_usdc: 0.01, price_unit: 'claim', base_url: 'http://localhost:4012', wallet_address: '0x71bE63f3384f5fb98995451bE4f258f792397013' },
+  { id: 'agent-shopping',     name: 'Shopping Agent',    skill: 'shopping',     description: 'Autonomous product discovery, multi-retailer price comparison, review sentiment analysis, and transparent recommendation agent', price_usdc: 0.02, price_unit: 'recommendation', base_url: 'http://localhost:4013', wallet_address: '0x324462bf424031a02e5319803185903218590321' },
 ];
 
 async function seedRegistry() {
   const db = getDb();
-  const existing = db.prepare('SELECT COUNT(*) as n FROM agents').get();
-  if (existing.n > 0) return;
-
-  console.log('[Seed] Seeding MST agent registry...');
+  console.log('[Seed] Ensuring MST agent registry is up to date...');
   const insert = db.prepare(`
     INSERT OR IGNORE INTO agents (id, name, skill, description, price_usdc, price_unit, wallet_id, wallet_address, base_url, bond_amount)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0.1)
@@ -47,7 +45,6 @@ async function seedRegistry() {
   for (const a of AGENTS_SEED) {
     insert.run(a.id, a.name, a.skill, a.description, a.price_usdc, a.price_unit,
       `mst_wallet_${a.id}`, a.wallet_address, a.base_url);
-    console.log(`[Seed] Registered ${a.name} (${a.wallet_address}) - ${a.price_usdc} MSTC`);
   }
   console.log('[Seed] Agent registry seeded with MST Testnet wallets.');
 }

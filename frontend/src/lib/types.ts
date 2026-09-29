@@ -66,6 +66,16 @@ export interface Subtask {
   completed_at: string | null;
 }
 
+export interface EscrowMetadata {
+  enabled: boolean;
+  contractAddress?: string;
+  taskId?: string;
+  fundingTxHash?: string | null;
+  settlementTxHash?: string | null;
+  refundTxHash?: string | null;
+  status?: 'none' | 'funded' | 'completed' | 'failed' | 'refunded' | 'cancelled';
+}
+
 export interface Job {
   id: string;
   description: string;
@@ -84,6 +94,11 @@ export interface Job {
   buyer_tx?: string | null;
   transaction_hash?: string | null;
   subtasks?: Subtask[];
+  escrow?: EscrowMetadata;
+  escrow_task_id?: string | null;
+  escrow_contract?: string | null;
+  settlement_tx?: string | null;
+  refund_tx?: string | null;
 }
 
 export interface Transaction {

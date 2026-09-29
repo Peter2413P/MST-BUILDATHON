@@ -6,10 +6,10 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import { getJob, getJobs, submitJob, sendChatMessage } from '@/lib/api';
-import type { Job, Subtask } from '@/lib/types';
+import type { Job, Subtask, EscrowMetadata } from '@/lib/types';
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
 import { useWallet } from '@/lib/wallet';
-import { estimateJobCost, getExplorerUrl } from '@/blockchain/mst';
+import { estimateJobCost, getExplorerUrl, isEscrowEnabled, getEscrowContractAddress } from '@/blockchain/mst';
 
 const SKILL_ICONS: Record<string, string> = {
   summarizer: 'summarize',
@@ -24,6 +24,12 @@ const SKILL_ICONS: Record<string, string> = {
   finance: 'trending_up',
   transcribe: 'graphic_eq',
   'fact-check': 'fact_check',
+  'ecommerce-builder': 'storefront',
+  shopping: 'shopping_bag',
+  'product-discovery': 'manage_search',
+  'price-comparison': 'payments',
+  'review-analysis': 'rate_review',
+  'product-ranking': 'leaderboard',
 };
 
 export type JobUIPhase =
@@ -71,12 +77,13 @@ interface MessageTurn {
   result?: string | null;
   error?: string | null;
   buyerTx?: string | null;
+  escrow?: EscrowMetadata;
   reasonedOpen?: boolean;
   toolsOpen?: boolean;
 }
 
 const DEFAULT_CHIPS = [
-  { label: 'Looks great! 💪', icon: 'sparkles' },
+  { label: 'Find me the best gaming laptop under ₹80,000', icon: 'shopping_bag' },
   { label: 'Audit contract for reentrancy & gas spikes', icon: 'gshield' },
   { label: 'Analyze dataset for multi-sig anomalies', icon: 'dataset' },
   { label: 'Research market volatility & generate hedge plan', icon: 'trending_up' },
@@ -106,6 +113,14 @@ function formatTime(isoString?: string | null) {
 function truncateTx(tx?: string | null) {
   if (!tx) return '';
   return `${tx.slice(0, 8)}...${tx.slice(-6)}`;
+}
+
+function isLikelyConversation(text: string): boolean {
+  const clean = text.trim().toLowerCase();
+  if (clean.length < 2) return true;
+  if (/^(hello|hi|hey|greetings|howdy|sup|yo|thanks|thank you|thx|good morning|good evening|good afternoon)\b/i.test(clean)) return true;
+  if (/^(who are you|what are you|what can you do|help|how does this work|what is mst|what is mstc)\b/i.test(clean)) return true;
+  return false;
 }
 
 function generateDecompositionThoughts(query: string, subtasks: Subtask[]) {
@@ -193,6 +208,7 @@ export default function ChatWorkspace({ initialJobId }: ChatWorkspaceProps) {
     authenticate,
     authorizeAutoPayments,
     sendPayment,
+    sendEscrowPayment,
     refreshBalance,
     refreshSessionStatus,
   } = useWallet();
@@ -302,6 +318,7 @@ export default function ChatWorkspace({ initialJobId }: ChatWorkspaceProps) {
               result: jobData.result,
               error: jobData.error,
               buyerTx: resolvedBuyerTx,
+              escrow: jobData.escrow || curr.escrow,
               startedAt: startTime,
               completedAt: endTime,
               durationSecs: durationSecs > 0 ? durationSecs : curr.durationSecs,
@@ -337,6 +354,7 @@ export default function ChatWorkspace({ initialJobId }: ChatWorkspaceProps) {
               result: jobData.result,
               error: jobData.error,
               buyerTx: resolvedBuyerTx,
+              escrow: jobData.escrow,
               reasonedOpen: !isTerminal,
               toolsOpen: !isTerminal,
             };
@@ -412,13 +430,19 @@ export default function ChatWorkspace({ initialJobId }: ChatWorkspaceProps) {
       content: m.content || (m.result ?? ''),
     }));
 
-    // If wallet is connected, broadcast real on-chain payment on MST Testnet
+    // If wallet is connected and query is a real task, broadcast real on-chain payment on MST Testnet
     let onChainTxHash: string | undefined;
-    if (address) {
+    if (address && !isLikelyConversation(text)) {
       try {
         const costMstc = estimateJobCost(text);
-        onChainTxHash = await sendPayment(costMstc, text);
-        console.log(`[ChatWorkspace] On-chain payment broadcasted on MST Testnet: ${onChainTxHash}`);
+        if (isEscrowEnabled() && sendEscrowPayment) {
+          const escrowResult = await sendEscrowPayment(costMstc, tempJobId);
+          onChainTxHash = escrowResult.txHash;
+          console.log(`[ChatWorkspace] On-chain escrow task deposit broadcasted on MST Testnet: ${onChainTxHash}`);
+        } else {
+          onChainTxHash = await sendPayment(costMstc, text);
+          console.log(`[ChatWorkspace] On-chain payment broadcasted on MST Testnet: ${onChainTxHash}`);
+        }
         void refreshBalance();
       } catch (payErr) {
         console.warn('[ChatWorkspace] Payment declined or off-chain fallback:', (payErr as Error).message);
@@ -942,15 +966,102 @@ export default function ChatWorkspace({ initialJobId }: ChatWorkspaceProps) {
                             </div>
                           </div>
                         )}
+                        {/* Escrow Smart Contract Details */}
+                        {turn.escrow && turn.escrow.contractAddress && (
+                          <div className="p-2.5 rounded-lg bg-white dark:bg-[#151814] border border-[#d2e8cb] dark:border-[#292E27] space-y-2">
+                            <div className="flex items-center justify-between text-[10px]">
+                              <span className="font-bold uppercase tracking-wider text-[#2d5000] dark:text-[#B8FF00] flex items-center gap-1 font-label-code">
+                                <span className="material-symbols-outlined text-[13px]">gshield</span>
+                                AgentMesh Escrow Contract
+                              </span>
+                              <span
+                                className={`px-2 py-0.5 rounded-full font-label-code text-[10px] font-bold ${
+                                  turn.escrow.status === 'completed'
+                                    ? 'bg-[#eaf5e6] dark:bg-[#B8FF00]/15 text-[#2d5000] dark:text-[#B8FF00]'
+                                    : turn.escrow.status === 'refunded'
+                                    ? 'bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400'
+                                    : 'bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-400'
+                                }`}
+                              >
+                                {turn.escrow.status || 'Active'}
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px] font-label-code">
+                              <div>
+                                <span className="text-[#757872] block">Contract:</span>
+                                <a
+                                  href={`https://testnet.mstscan.com/address/${turn.escrow.contractAddress}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-[#2d5000] dark:text-[#B8FF00] hover:underline flex items-center gap-0.5"
+                                >
+                                  <span>{truncateTx(turn.escrow.contractAddress)}</span>
+                                  <span className="material-symbols-outlined text-[11px]">open_in_new</span>
+                                </a>
+                              </div>
+                              <div>
+                                <span className="text-[#757872] block">Escrow Task ID:</span>
+                                <span className="text-[#121511] dark:text-[#F5F7F2]">{truncateTx(turn.escrow.taskId)}</span>
+                              </div>
+                            </div>
+
+                            {/* Settlement / Refund Tx Links */}
+                            {turn.escrow.settlementTxHash && (
+                              <div className="flex items-center justify-between text-[10px] font-label-code border-t border-[#f0f4ee] dark:border-[#292E27] pt-1.5">
+                                <span className="text-[#757872]">Settlement Payout Tx:</span>
+                                <a
+                                  href={`https://testnet.mstscan.com/tx/${turn.escrow.settlementTxHash}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-[#2d5000] dark:text-[#B8FF00] hover:underline flex items-center gap-0.5"
+                                >
+                                  <span>{truncateTx(turn.escrow.settlementTxHash)}</span>
+                                  <span className="material-symbols-outlined text-[11px]">open_in_new</span>
+                                </a>
+                              </div>
+                            )}
+                            {turn.escrow.refundTxHash && (
+                              <div className="flex items-center justify-between text-[10px] font-label-code border-t border-[#f0f4ee] dark:border-[#292E27] pt-1.5 text-amber-700 dark:text-amber-400">
+                                <span>Escrow Refund Tx:</span>
+                                <a
+                                  href={`https://testnet.mstscan.com/tx/${turn.escrow.refundTxHash}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="hover:underline flex items-center gap-0.5"
+                                >
+                                  <span>{truncateTx(turn.escrow.refundTxHash)}</span>
+                                  <span className="material-symbols-outlined text-[11px]">open_in_new</span>
+                                </a>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                   </>
                 )}
 
                 {turn.error && (
-                  <div className="p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 rounded-xl text-xs text-[#ba1a1a]">
-                    <span className="font-bold">Execution Notice: </span>
-                    {turn.error}
+                  <div className="p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 rounded-xl text-xs text-[#ba1a1a] space-y-2">
+                    <div>
+                      <span className="font-bold">Execution Notice: </span>
+                      {turn.error}
+                    </div>
+                    {turn.escrow?.refundTxHash && (
+                      <div className="flex items-center justify-between text-[11px] font-label-code pt-1 border-t border-red-200 dark:border-red-900/50 text-[#2d5000] dark:text-[#B8FF00]">
+                        <span>✓ Funds Refunded via Escrow Contract:</span>
+                        <a
+                          href={`https://testnet.mstscan.com/tx/${turn.escrow.refundTxHash}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:underline flex items-center gap-0.5"
+                        >
+                          <span>{truncateTx(turn.escrow.refundTxHash)}</span>
+                          <span className="material-symbols-outlined text-[11px]">open_in_new</span>
+                        </a>
+                      </div>
+                    )}
                   </div>
                 )}
 

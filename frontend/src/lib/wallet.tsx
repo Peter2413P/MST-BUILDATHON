@@ -69,6 +69,12 @@ export interface WalletState {
   authorizeAutoPayments: (maxSpendMstc?: number) => Promise<boolean>;
   disconnect: () => void;
   sendPayment: (amountMstc: string, description?: string) => Promise<string>;
+  sendEscrowPayment: (
+    amountMstc: string,
+    jobId: string,
+    agentAddress?: string,
+    deadlineSec?: number
+  ) => Promise<{ txHash: string; taskId: string; contractAddress: string }>;
   refreshBalance: () => Promise<void>;
   refreshSessionStatus: () => Promise<void>;
 }
@@ -91,6 +97,9 @@ const WalletCtx = createContext<WalletState>({
   authorizeAutoPayments: async () => false,
   disconnect: () => {},
   sendPayment: async () => {
+    throw new Error('Wallet not connected');
+  },
+  sendEscrowPayment: async () => {
     throw new Error('Wallet not connected');
   },
   refreshBalance: async () => {},
@@ -378,6 +387,31 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     [address, activeProvider, refreshBalance, refreshSessionStatus]
   );
 
+  const sendEscrowPayment = useCallback(
+    async (
+      amountMstc: string,
+      jobId: string,
+      agentAddress?: string,
+      deadlineSec: number = 3600
+    ): Promise<{ txHash: string; taskId: string; contractAddress: string }> => {
+      const provider =
+        activeProvider ||
+        (typeof window !== 'undefined' ? (window as unknown as { ethereum?: RawEIP1193Provider }).ethereum : null);
+      if (!address || !provider) throw new Error('Wallet not connected');
+
+      const { createTaskOnEscrow } = await import('@/blockchain/mst');
+      const res = await createTaskOnEscrow(provider, address, jobId, agentAddress, amountMstc, deadlineSec);
+      try {
+        await refreshBalance(address);
+        await refreshSessionStatus();
+      } catch {
+        /* non-critical */
+      }
+      return res;
+    },
+    [address, activeProvider, refreshBalance, refreshSessionStatus]
+  );
+
   // ── Account Change Listener ──────────────────────────────────────────────────
   useEffect(() => {
     if (!activeProvider) return;
@@ -436,6 +470,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       authorizeAutoPayments,
       disconnect,
       sendPayment,
+      sendEscrowPayment,
       refreshBalance,
       refreshSessionStatus,
     }),
@@ -451,6 +486,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       authorizeAutoPayments,
       disconnect,
       sendPayment,
+      sendEscrowPayment,
       refreshBalance,
       refreshSessionStatus,
     ]

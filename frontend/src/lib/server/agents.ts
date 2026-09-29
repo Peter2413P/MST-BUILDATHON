@@ -104,6 +104,36 @@ const AGENT_DEFS: AgentDef[] = [
     system: 'Autonomous agent that plans, designs, builds, tests, debugs, and delivers production-ready e-commerce websites.',
     buildPrompt: (p, ctx) => ctx ? `Context:\n${ctx}\n\nBuild e-commerce store for:\n${p}` : p,
   },
+  {
+    skill: 'shopping',
+    maxTokens: 3500,
+    system: 'Autonomous product discovery, price comparison, review analysis, and transparent recommendation agent.',
+    buildPrompt: (p, ctx) => ctx ? `Context:\n${ctx}\n\nShopping task:\n${p}` : p,
+  },
+  {
+    skill: 'product-discovery',
+    maxTokens: 2048,
+    system: 'Discover real products across connected catalog feeds without hallucination.',
+    buildPrompt: (p, ctx) => ctx ? `Context:\n${ctx}\n\nSearch products:\n${p}` : p,
+  },
+  {
+    skill: 'price-comparison',
+    maxTokens: 1536,
+    system: 'Deduplicate products and compare prices across multiple retailers.',
+    buildPrompt: (p, ctx) => ctx ? `Context:\n${ctx}\n\nCompare prices:\n${p}` : p,
+  },
+  {
+    skill: 'review-analysis',
+    maxTokens: 1536,
+    system: 'Analyze real user reviews, volume reliability, sentiment, positives, and drawbacks.',
+    buildPrompt: (p, ctx) => ctx ? `Context:\n${ctx}\n\nAnalyze reviews:\n${p}` : p,
+  },
+  {
+    skill: 'product-ranking',
+    maxTokens: 2048,
+    system: 'Deterministically filter hard constraints and rank products with transparent multi-criteria scoring.',
+    buildPrompt: (p, ctx) => ctx ? `Context:\n${ctx}\n\nRank products:\n${p}` : p,
+  },
 ];
 
 const AGENT_BY_SKILL = Object.fromEntries(AGENT_DEFS.map(a => [a.skill, a]));
@@ -158,6 +188,37 @@ export async function runAgentInline(
     const tokensUsed = 1200;
     const qualityScore = buildArtifact.status === 'success' ? 0.98 : 0.75;
     return { result, tokensUsed, qualityScore, servedBy: 'ECommerceWebsiteBuilderEngine' };
+  }
+
+  // Route specialized autonomous workflow for shopping recommendation agent
+  if (skill === 'shopping') {
+    const { executeShoppingWorkflow } = await import('./shopping/orchestrator');
+    const start = Date.now();
+    const shoppingArtifact = await executeShoppingWorkflow(prompt);
+    const result = JSON.stringify(shoppingArtifact, null, 2);
+    const elapsed = Date.now() - start;
+    const tokensUsed = 1100;
+    const qualityScore = shoppingArtifact.status === 'success' || shoppingArtifact.status === 'conflict' ? 0.98 : 0.75;
+    return { result, tokensUsed, qualityScore, servedBy: 'ShoppingAgentAutonomousEngine' };
+  }
+
+  // Route specialized sub-agent for product discovery
+  if (skill === 'product-discovery') {
+    const { getProviderRegistry } = await import('./shopping/providers/registry');
+    const { extractRequirementsDeterministically } = await import('./shopping/planner/extractor');
+    const reqs = extractRequirementsDeterministically(prompt);
+    const registry = getProviderRegistry();
+    const discovery = await registry.discoverProducts({
+      query: prompt,
+      category: reqs.category,
+      maxPrice: reqs.budget.maximum,
+    });
+    return {
+      result: JSON.stringify(discovery, null, 2),
+      tokensUsed: 400,
+      qualityScore: discovery.products.length > 0 ? 0.95 : 0.8,
+      servedBy: 'ProductDiscoverySpecialist',
+    };
   }
 
   const userMessage = def.buildPrompt(prompt, context);

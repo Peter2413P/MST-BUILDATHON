@@ -532,3 +532,105 @@ export async function executeMstAgentSplits(
     primaryTxHash: null,
   };
 }
+
+/**
+ * Release escrowed funds to hired agent on MST Testnet via AgentMeshEscrow.completeTask(taskId).
+ */
+export async function executeEscrowTaskComplete(
+  jobId: string,
+  agentAddress?: string
+): Promise<{ success: boolean; txHash: string | null; blockNumber: number | null; error?: string }> {
+  const { isEscrowEnabled, getEscrowContractAddress, calculateTaskId, ESCROW_ABI } = await import(
+    '@/blockchain/mst/escrow'
+  );
+
+  if (!isEscrowEnabled()) {
+    return { success: false, txHash: null, blockNumber: null, error: 'Escrow mode not active or contract unconfigured' };
+  }
+
+  if (!PLATFORM_PRIVATE_KEY || !PLATFORM_PRIVATE_KEY.startsWith('0x')) {
+    return { success: false, txHash: null, blockNumber: null, error: 'Platform executor private key not configured' };
+  }
+
+  try {
+    const provider = getMstProvider();
+    const signer = new ethers.Wallet(PLATFORM_PRIVATE_KEY, provider);
+    const contractAddress = getEscrowContractAddress();
+    const contract = new ethers.Contract(contractAddress, ESCROW_ABI, signer);
+    const taskId = calculateTaskId(jobId);
+
+    console.log(`[Escrow Settlement] Calling completeTask on contract ${contractAddress} for taskId ${taskId}`);
+    const tx = await contract.completeTask(taskId);
+    console.log(`[Escrow Settlement] completeTask submitted: ${tx.hash}`);
+
+    const receipt = await tx.wait(1);
+    console.log(`[Escrow Settlement] completeTask confirmed in block #${receipt.blockNumber}`);
+
+    return {
+      success: true,
+      txHash: tx.hash,
+      blockNumber: receipt.blockNumber,
+    };
+  } catch (err) {
+    const errorMsg = (err as Error).message;
+    console.error(`[Escrow Settlement] completeTask failed for job ${jobId}:`, errorMsg);
+    return { success: false, txHash: null, blockNumber: null, error: errorMsg };
+  }
+}
+
+/**
+ * Refund escrowed funds to user on MST Testnet via AgentMeshEscrow.failTask(taskId).
+ */
+export async function executeEscrowTaskFail(
+  jobId: string,
+  reason: string
+): Promise<{ success: boolean; txHash: string | null; blockNumber: number | null; error?: string }> {
+  const { isEscrowEnabled, getEscrowContractAddress, calculateTaskId, ESCROW_ABI } = await import(
+    '@/blockchain/mst/escrow'
+  );
+
+  if (!isEscrowEnabled()) {
+    return { success: false, txHash: null, blockNumber: null, error: 'Escrow mode not active or contract unconfigured' };
+  }
+
+  if (!PLATFORM_PRIVATE_KEY || !PLATFORM_PRIVATE_KEY.startsWith('0x')) {
+    return { success: false, txHash: null, blockNumber: null, error: 'Platform executor private key not configured' };
+  }
+
+  try {
+    const provider = getMstProvider();
+    const signer = new ethers.Wallet(PLATFORM_PRIVATE_KEY, provider);
+    const contractAddress = getEscrowContractAddress();
+    const contract = new ethers.Contract(contractAddress, ESCROW_ABI, signer);
+    const taskId = calculateTaskId(jobId);
+
+    console.log(`[Escrow Settlement] Calling failTask on contract ${contractAddress} for taskId ${taskId} (Reason: ${reason})`);
+    const tx = await contract.failTask(taskId);
+    console.log(`[Escrow Settlement] failTask refund submitted: ${tx.hash}`);
+
+    const receipt = await tx.wait(1);
+    console.log(`[Escrow Settlement] failTask refund confirmed in block #${receipt.blockNumber}`);
+
+    return {
+      success: true,
+      txHash: tx.hash,
+      blockNumber: receipt.blockNumber,
+    };
+  } catch (err) {
+    const errorMsg = (err as Error).message;
+    console.error(`[Escrow Settlement] failTask failed for job ${jobId}:`, errorMsg);
+    return { success: false, txHash: null, blockNumber: null, error: errorMsg };
+  }
+}
+
+/**
+ * Reads on-chain escrow state for a given jobId.
+ */
+export async function verifyEscrowTaskOnChain(jobId: string) {
+  const { isEscrowEnabled, calculateTaskId, fetchEscrowTask } = await import('@/blockchain/mst/escrow');
+  if (!isEscrowEnabled()) return null;
+
+  const taskId = calculateTaskId(jobId);
+  return await fetchEscrowTask(taskId, getMstProvider());
+}
+

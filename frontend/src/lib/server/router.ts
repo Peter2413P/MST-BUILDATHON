@@ -43,6 +43,7 @@ const AVAILABLE_SKILLS = [
   'transcribe (audio speech-to-text)',
   'fact-check (claim verification)',
   'ecommerce-builder (web/app generation)',
+  'shopping (product discovery, price comparison, review analysis, and recommendations)',
 ];
 
 /**
@@ -52,22 +53,25 @@ function deterministicFallbackClassifier(context: RouterContext): RouterOutput {
   const msg = (context.current_message || '').trim().toLowerCase();
   const prevTask = context.previous_task;
 
-  // Obvious conversation patterns
+  // Obvious conversation patterns (questions, inquiries, opinions)
   const conversationQuestions = [
-    /^(what|why|how|who|where|when|can you explain|explain|tell me about|is it|are you)\b/i,
+    /^(what|why|how|who|where|when|can you explain|explain|tell me about|just tell me|tell me|which|is it|are you|should i|do you think)\b/i,
     /^(hello|hi|hey|greetings|thanks|thank you|good morning|good evening)\b/i,
     /\b(mean|meaning|explain|explanation|clarify|clarification|why did|how did|how much cost|cost of|what agents|available agents|about mst|about mstc)\b/i,
     /\b(why.*fail|why.*error|why.*broken|what happened)\b/i,
+    /\b(what gpu is good|which gpu is best|what is a good|is rtx.*good for)\b/i,
   ];
 
   // Explicit execution action verbs
   const explicitTaskVerbs = [
     /^(calculate|compute|analyze|extract|build|create|generate|translate|transcribe|research|review|check|verify|write sql|plot|make a chart|run|retry|do the same|do it again)\b/i,
+    /^(find|search for|compare|recommend|shop for|i need|get me|no \w+ over)\b/i,
     /\b(create a chart|make a chart|generate a chart|plot this|draw a chart|create a pie chart|create a bar chart)\b/i,
     /\b(translate (this|it|the result) to|translate to)\b/i,
     /\b(retry (the|with)|calculate.*again|run.*again|do.*again|do the same task)\b/i,
     /\b(build (me )?an?|develop|code a|write code for)\b/i,
     /\b(extract (the|from)|scrape|parse)\b/i,
+    /\b(find (me )?a|find (me )?the best|find an|compare the best|compare these|laptop under|phone under|shoes under|monitors? under)\b/i,
   ];
 
   // Ambiguous phrasing

@@ -245,6 +245,18 @@ function validateAgentOutput(
         }
         break;
       }
+
+      case 'shopping': {
+        const hasShopping = /type.*shopping|rankedProducts|conflictDetails|recommendation|best match|price comparison/i.test(trimmed);
+        if (!hasShopping && trimmed.length < 50) {
+          return {
+            isValid: false,
+            errorType: 'empty_output',
+            errorMessage: 'Shopping agent did not produce valid structured shopping recommendations.',
+          };
+        }
+        break;
+      }
     }
   }
 
@@ -698,9 +710,22 @@ export async function runJob(jobId: string, description: string, sessionId?: str
       ? `Task could not be completed because ${rootFailure.skill} agent failed: ${rootFailure.error || 'prerequisite unsatisfied'}`
       : 'All subtasks failed — no output produced';
 
+    // Trigger on-chain escrow refund if escrow mode is active
+    let refundTx: string | null = null;
+    try {
+      const { executeEscrowTaskFail } = await import('./mst');
+      const refundRes = await executeEscrowTaskFail(jobId, failureMsg);
+      if (refundRes.success && refundRes.txHash) {
+        refundTx = refundRes.txHash;
+        console.log(`[Job ${jobId}] On-chain escrow refund executed: ${refundTx}`);
+      }
+    } catch (refundErr) {
+      console.warn(`[Job ${jobId}] Escrow refund execution notice:`, refundErr);
+    }
+
     await exec(
-      'UPDATE jobs SET status = ?, error = ?, completed_at = ? WHERE id = ?',
-      ['failed', failureMsg, new Date().toISOString(), jobId]
+      'UPDATE jobs SET status = ?, error = ?, completed_at = ?, refund_tx = ?, payment_status = ? WHERE id = ?',
+      ['failed', failureMsg, new Date().toISOString(), refundTx, refundTx ? 'refunded' : 'failed', jobId]
     );
     console.log(`[Job ${jobId}] Finished with status: FAILED (${failureMsg})`);
     await flushNow();
@@ -773,12 +798,29 @@ export async function runJob(jobId: string, description: string, sessionId?: str
       }
     }
 
-    const jobSettlementStatus = verifiedOnChain ? 'settled' : (buyerTx ? 'payment_verification_failed' : 'session_authorized');
+    let escrowSettlementTx: string | null = null;
+    try {
+      const { executeEscrowTaskComplete } = await import('./mst');
+      const primaryAgent = completedNodes[0]?.agentId;
+      const agentRow = primaryAgent ? (await query('SELECT wallet_address FROM agents WHERE id = ?', [primaryAgent])) : [];
+      const agentWallet = (agentRow[0]?.wallet_address as string) || undefined;
+      const escrowRes = await executeEscrowTaskComplete(jobId, agentWallet);
+      if (escrowRes.success && escrowRes.txHash) {
+        escrowSettlementTx = escrowRes.txHash;
+        console.log(`[Job ${jobId}] On-chain escrow completeTask settled: ${escrowSettlementTx}`);
+      }
+    } catch (escrowErr) {
+      console.warn(`[Job ${jobId}] Escrow completeTask notice:`, escrowErr);
+    }
 
-    await exec('UPDATE jobs SET status = ?, payment_status = ?, buyer_tx = ?, completed_at = ?, result = ?, error = NULL WHERE id = ?', [
+    const jobSettlementStatus = (verifiedOnChain || escrowSettlementTx) ? 'settled' : (buyerTx ? 'payment_verification_failed' : 'session_authorized');
+    const finalTxHash = escrowSettlementTx || (verifiedOnChain ? primaryTxHash : null);
+
+    await exec('UPDATE jobs SET status = ?, payment_status = ?, buyer_tx = ?, settlement_tx = ?, completed_at = ?, result = ?, error = NULL WHERE id = ?', [
       'completed',
       jobSettlementStatus,
-      verifiedOnChain ? primaryTxHash : null,
+      finalTxHash,
+      escrowSettlementTx,
       settledAt,
       finalResult,
       jobId,

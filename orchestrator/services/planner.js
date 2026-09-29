@@ -4,6 +4,7 @@ const SKILLS = [
   'summarizer', 'code-review', 'research', 'translate',
   'sentiment', 'sql', 'chart', 'extract',
   'legal-review', 'finance', 'transcribe', 'fact-check',
+  'ecommerce-builder', 'shopping',
 ];
 
 async function decomposeJob(jobDescription, availableAgents) {

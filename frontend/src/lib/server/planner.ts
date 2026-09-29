@@ -4,7 +4,8 @@ const SKILLS = [
   'summarizer', 'code-review', 'research', 'translate',
   'sentiment', 'sql', 'chart', 'extract',
   'legal-review', 'finance', 'transcribe', 'fact-check',
-  'ecommerce-builder',
+  'ecommerce-builder', 'shopping', 'product-discovery',
+  'price-comparison', 'review-analysis', 'product-ranking',
 ];
 
 export interface SubtaskPlan {
@@ -160,6 +161,46 @@ Rules:
           { id: 'task_2', skill: 'chart', prompt: `Generate chart for: ${description}`, dependencies: ['task_1'], optional: false, complexity_weight: 1.0, position: 2 },
         ],
         reasoning: 'Domain match: Finance calculation (task_1) then Chart visualization (task_2).',
+      };
+    }
+
+    // 4. Shopping & Product Discovery / Comparison matching
+    if (
+      !lower.includes('build') &&
+      !lower.includes('website') &&
+      !lower.includes('storefront') &&
+      (
+        lower.includes('laptop') ||
+        lower.includes('phone') ||
+        lower.includes('shoes') ||
+        lower.includes('running shoe') ||
+        lower.includes('monitor') ||
+        lower.includes('rtx') ||
+        lower.includes('under ₹') ||
+        lower.includes('under rs') ||
+        lower.includes('under $') ||
+        lower.includes('find me the best') ||
+        lower.includes('find an') ||
+        lower.includes('find running') ||
+        lower.includes('compare the best') ||
+        lower.includes('compare these') ||
+        lower.includes('buy a') ||
+        lower.includes('recommend a')
+      )
+    ) {
+      return {
+        subtasks: [
+          {
+            id: 'task_1',
+            skill: 'shopping',
+            prompt: description,
+            dependencies: [],
+            optional: false,
+            complexity_weight: 1.5,
+            position: 1,
+          },
+        ],
+        reasoning: 'Domain match: Shopping Agent for autonomous product discovery, price comparison, review analysis, and recommendation.',
       };
     }
 

@@ -9,3 +9,4 @@ export * from './client';
 export * from './wallet';
 export * from './payments';
 export * from './transactions';
+export * from './escrow';

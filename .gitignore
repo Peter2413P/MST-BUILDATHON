@@ -3,8 +3,15 @@ node_modules/
 *.db
 *.db-shm
 *.db-wal
-orchestrator/.env
 .env
+.env.local
+.env.*.local
+.env.production
+.env.production.local
+.env.development.local
+orchestrator/.env
 .vercel
 workspace/
 *.log
+dist/
+build/

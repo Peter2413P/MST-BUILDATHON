@@ -178,6 +178,10 @@ function ensureSchema(db: SqlJsDatabase): Promise<void> {
     'ALTER TABLE subtasks ADD COLUMN error_type TEXT',
     'ALTER TABLE subtasks ADD COLUMN optional INTEGER DEFAULT 0',
     'ALTER TABLE subtasks ADD COLUMN retry_count INTEGER DEFAULT 0',
+    'ALTER TABLE jobs ADD COLUMN escrow_task_id TEXT',
+    'ALTER TABLE jobs ADD COLUMN escrow_contract TEXT',
+    'ALTER TABLE jobs ADD COLUMN settlement_tx TEXT',
+    'ALTER TABLE jobs ADD COLUMN refund_tx TEXT',
   ]) {
     try { db.exec(ddl); } catch { /* column already exists */ }
   }

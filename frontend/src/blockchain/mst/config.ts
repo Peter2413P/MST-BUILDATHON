@@ -36,11 +36,18 @@ export const MST_MAINNET_CONFIG = {
 // Active configuration (defaults to Testnet for hackathon and development)
 export const ACTIVE_NETWORK = MST_TESTNET_CONFIG;
 
-// Platform Escrow / Settlement Wallet Address
-// All job payments are held here before agent orchestration & split settlement
+// Platform Escrow / Settlement Wallet Address (Legacy fallback EOA)
 export const PLATFORM_ESCROW_WALLET =
   process.env.NEXT_PUBLIC_MST_PLATFORM_WALLET ||
   '0x6001712aE72d24Babc386866d035b6d55331E634';
+
+// Settlement Mode: 'escrow' (on-chain smart contract) or 'legacy' (direct native EOA transfer)
+export const MST_SETTLEMENT_MODE: 'escrow' | 'legacy' =
+  ((process.env.NEXT_PUBLIC_MST_SETTLEMENT_MODE || process.env.MST_SETTLEMENT_MODE) === 'escrow' ? 'escrow' : 'legacy');
+
+// Deployed AgentMeshEscrow Smart Contract Address on MST Testnet
+export const MST_ESCROW_CONTRACT_ADDRESS: string =
+  (process.env.NEXT_PUBLIC_MST_ESCROW_CONTRACT || process.env.MST_ESCROW_CONTRACT || '').trim();
 
 export const MST_CHAIN_PARAMS = {
   chainId: ACTIVE_NETWORK.chainIdHex,

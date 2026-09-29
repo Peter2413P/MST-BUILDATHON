@@ -20,6 +20,7 @@ import JsonRenderer from './JsonRenderer';
 import PdfRenderer from './PdfRenderer';
 import FactCheckRenderer from './FactCheckRenderer';
 import WebsiteArtifactRenderer from './WebsiteArtifactRenderer';
+import ShoppingRenderer from './ShoppingRenderer';
 
 interface ArtifactRendererProps {
   artifact?: NormalizedArtifact;
@@ -71,6 +72,7 @@ function SingleArtifactRenderer({ artifact }: { artifact: NormalizedArtifact }) 
   if (process.env.NODE_ENV !== 'production') {
     const rendererMap: Record<string, string> = {
       website: 'WebsiteArtifactRenderer',
+      shopping: 'ShoppingRenderer',
       fact_check: 'FactCheckRenderer',
       chart: 'ChartRenderer',
       table: 'TableRenderer',
@@ -86,6 +88,15 @@ function SingleArtifactRenderer({ artifact }: { artifact: NormalizedArtifact }) 
   }
 
   switch (artifact.type) {
+    case 'shopping':
+      return (
+        <ShoppingRenderer
+          spec={artifact.data}
+          rawJson={artifact.rawContent}
+          title={artifact.title}
+        />
+      );
+
     case 'website':
       return (
         <WebsiteArtifactRenderer

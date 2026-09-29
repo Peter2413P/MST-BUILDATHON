@@ -32,7 +32,21 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       }
       return { ...s, dependencies: deps, optional: Boolean(s.optional) };
     });
-    return NextResponse.json({ ...job, subtasks: parsedSubtasks });
+    const escrowMetadata = (job.escrow_task_id || job.escrow_contract)
+      ? {
+          enabled: true,
+          contractAddress: (job.escrow_contract as string) || undefined,
+          taskId: (job.escrow_task_id as string) || undefined,
+          fundingTxHash: ((job.buyer_tx || job.escrow_tx) as string) || null,
+          settlementTxHash: (job.settlement_tx as string) || null,
+          refundTxHash: (job.refund_tx as string) || null,
+          status: (job.status === 'completed' || job.status === 'settled')
+            ? ('completed' as const)
+            : (job.status === 'failed' ? ('refunded' as const) : ('funded' as const)),
+        }
+      : undefined;
+
+    return NextResponse.json({ ...job, escrow: escrowMetadata, subtasks: parsedSubtasks });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }

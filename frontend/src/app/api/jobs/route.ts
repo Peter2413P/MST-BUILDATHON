@@ -95,11 +95,15 @@ export async function POST(req: NextRequest) {
     }
 
     dedupCache.set(dedupKey, { jobId, ts: Date.now() });
-    console.log(`[Job ${jobId}] Creating — payer: ${payer_address ?? 'none'} on-chain tx: ${finalTxHash || 'NONE'}`);
+    const { isEscrowEnabled, calculateTaskId, MST_ESCROW_CONTRACT_ADDRESS } = await import('@/blockchain/mst/escrow');
+    const escrowTaskId = isEscrowEnabled() ? calculateTaskId(jobId) : null;
+    const escrowContract = isEscrowEnabled() ? MST_ESCROW_CONTRACT_ADDRESS : null;
+
+    console.log(`[Job ${jobId}] Creating — payer: ${payer_address ?? 'none'} on-chain tx: ${finalTxHash || 'NONE'} escrow: ${escrowTaskId || 'legacy'}`);
 
     await exec(
-      'INSERT INTO jobs (id, description, status, buyer_tx, payer_address, payment_status) VALUES (?, ?, ?, ?, ?, ?)',
-      [jobId, description.trim(), 'pending', finalTxHash, payer_address || null, finalTxHash ? 'confirming' : 'session_authorized']
+      'INSERT INTO jobs (id, description, status, buyer_tx, payer_address, payment_status, escrow_task_id, escrow_contract) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [jobId, description.trim(), 'pending', finalTxHash, payer_address || null, finalTxHash ? 'confirming' : 'session_authorized', escrowTaskId, escrowContract]
     );
 
     // Record initial on-chain query transaction in ledger only if real on-chain tx exists

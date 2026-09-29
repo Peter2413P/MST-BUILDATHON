@@ -9,7 +9,8 @@ export type ArtifactType =
   | 'table'
   | 'json'
   | 'fact_check'
-  | 'website';
+  | 'website'
+  | 'shopping';
 
 export interface ChartDataset {
   label?: string;
